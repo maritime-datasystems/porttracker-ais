@@ -4,15 +4,20 @@ A minimal headless AIS receiver service for Android. This app runs as a backgrou
 
 ## Features
 
-- **Headless Operation**: Runs as an Android foreground service
+- **Headless Operation**: Runs as an Android foreground service (wake + WiFi lock, battery-exemption prompt, sticky restart)
 - **USB SDR Support**: RTL-SDR, AirSpy, AirSpy HF+
 - **Network Sources**: RTL-TCP, SpyServer
 - **Multiple Outputs**:
-  - UDP (NMEA or JSON)
-  - TCP Listener
-  - Built-in Web Interface with map
+  - MQTT to PortTracker/TrustedDocks (provisioned via API key, `aisc-json` or raw)
+  - UDP (NMEA or JSON, up to 4 targets) and TCP listener
+  - Built-in web interface with live map, NMEA stream (SSE/polling), and admin API
+- **Remote Access**: FRP tunnel per station (`https://<station>.…`), Basic-auth gated
+- **Vessel Cache**: persistent SQLite store of static vessel data + tiered position history
+- **GPS Forwarding**: phone GPS/compass as `$GPRMC/$GPGGA/$HEHDT` over UDP
+- **OTA Updates**: manifest-driven APK self-update from the admin UI
 - **Auto-Start**: On boot or USB device connection
-- **Simple Settings UI**: Minimal configuration screen
+
+Full component/threading/API documentation: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 
 ## Requirements
 

@@ -306,26 +306,6 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun ensureServiceStarted() {
-        if (!AisReceiverService.isRunning) {
-            val prefs = PreferenceManager.getDefaultSharedPreferences(this)
-            // Ensure web viewer is enabled
-            prefs.edit().putBoolean("webviewer_enabled", true).apply()
-
-            val deviceInfo = UsbDeviceScanner.scanForDevices(this)
-            val intent = Intent(this, AisReceiverService::class.java).apply {
-                if (deviceInfo.found && deviceInfo.isUsable) {
-                    putExtra("USB_VENDOR_ID", deviceInfo.vendorId)
-                    putExtra("USB_PRODUCT_ID", deviceInfo.productId)
-                } else {
-                    putExtra("USB_VENDOR_ID", 0)
-                    putExtra("USB_PRODUCT_ID", 0)
-                }
-            }
-            startForegroundService(intent)
-        }
-    }
-
     // =============== USB PERMISSION HANDLING ===============
 
     override fun onNewIntent(intent: Intent?) {
@@ -396,71 +376,6 @@ class SettingsActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             // Ignore permission check errors
-        }
-    }
-
-    // =============== SERVICE CONTROL ===============
-
-    private fun startService() {
-        val deviceInfo = UsbDeviceScanner.scanForDevices(this)
-
-        if (!deviceInfo.found) {
-            // No SDR - start in web-only mode (always needed for WebView UI)
-            Toast.makeText(this, "🌐 Starting in web-only mode...", Toast.LENGTH_SHORT).show()
-            try {
-                val intent = Intent(this, AisReceiverService::class.java).apply {
-                    putExtra("USB_VENDOR_ID", 0)
-                    putExtra("USB_PRODUCT_ID", 0)
-                }
-                startForegroundService(intent)
-            } catch (e: Exception) {
-                Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-
-        if (!deviceInfo.isUsable) {
-            Toast.makeText(this, "⚠️ SDR needs permission - requesting...", Toast.LENGTH_SHORT).show()
-            requestSdrPermission(deviceInfo)
-            return
-        }
-
-        try {
-            val intent = Intent(this, AisReceiverService::class.java).apply {
-                putExtra("USB_VENDOR_ID", deviceInfo.vendorId)
-                putExtra("USB_PRODUCT_ID", deviceInfo.productId)
-            }
-            startForegroundService(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun stopService() {
-        try {
-            val intent = Intent(this, AisReceiverService::class.java)
-            stopService(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun requestSdrPermission(deviceInfo: UsbDeviceScanner.SdrDeviceInfo) {
-        try {
-            val usbManager = getSystemService(Context.USB_SERVICE) as? UsbManager ?: return
-            for ((_, device) in usbManager.deviceList) {
-                if (device.vendorId == deviceInfo.vendorId && device.productId == deviceInfo.productId) {
-                    val pendingIntent = PendingIntent.getBroadcast(
-                        this, 0,
-                        Intent(USB_PERMISSION_ACTION),
-                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                    )
-                    usbManager.requestPermission(device, pendingIntent)
-                    return
-                }
-            }
-        } catch (e: Exception) {
-            // Ignore
         }
     }
 

@@ -115,13 +115,14 @@ class UpdateManager(private val context: Context) {
         isChecking = true
         lastError = null
         val manifestUrl = getManifestUrl()
+        var conn: HttpURLConnection? = null
         try {
             val currentCode = getCurrentVersionCode(context)
             val currentName = getCurrentVersionName(context)
 
             Log.i(TAG, "Checking for updates from: $manifestUrl")
 
-            val conn = URL(manifestUrl).openConnection() as HttpURLConnection
+            conn = URL(manifestUrl).openConnection() as HttpURLConnection
             conn.setRequestProperty("User-Agent", "PortTracker-AIS/$currentName")
             conn.setRequestProperty("Cache-Control", "no-cache")
             conn.connectTimeout = 15_000
@@ -182,6 +183,7 @@ class UpdateManager(private val context: Context) {
             lastCheckResult = info
             return info
         } finally {
+            conn?.disconnect()
             isChecking = false
         }
     }
@@ -200,11 +202,12 @@ class UpdateManager(private val context: Context) {
         isDownloading = true
         downloadProgress = 0
         lastError = null
+        var conn: HttpURLConnection? = null
 
         try {
             Log.i(TAG, "Downloading APK from: $apkUrl")
 
-            val conn = URL(apkUrl).openConnection() as HttpURLConnection
+            conn = URL(apkUrl).openConnection() as HttpURLConnection
             conn.setRequestProperty("User-Agent", "PortTracker-AIS/${info.currentVersionName}")
             conn.connectTimeout = 30_000
             conn.readTimeout = 120_000
@@ -247,6 +250,7 @@ class UpdateManager(private val context: Context) {
             lastError = e.message ?: "Download failed"
             return false
         } finally {
+            conn?.disconnect()
             isDownloading = false
         }
     }

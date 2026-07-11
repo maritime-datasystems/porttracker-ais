@@ -59,6 +59,10 @@ class GpsForwarder(
         
         private fun recordMessage() {
             synchronized(messageTimesLock) {
+                // Prune on write too — on headless stations nothing may ever
+                // read messagesLastMinute, and the list must not grow forever.
+                val cutoff = System.currentTimeMillis() - 60000
+                messageTimes.removeAll { it < cutoff }
                 messageTimes.add(System.currentTimeMillis())
             }
         }

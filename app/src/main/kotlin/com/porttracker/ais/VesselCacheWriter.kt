@@ -128,8 +128,14 @@ class VesselCacheWriter(
             db.insertPositions(positions)
             positionsStored += positions.size
         }
-        // Bound the in-memory dedup map over very long runs.
-        if (lastStored.size > 10_000) lastStored.clear()
+        // Bound the in-memory dedup map over very long runs. Drop stale
+        // entries first — a full clear() would burst duplicate points for
+        // every currently-tracked vessel on the next poll.
+        if (lastStored.size > 10_000) {
+            val cutoff = now - HEARTBEAT_MS
+            lastStored.entries.removeAll { it.value.ts < cutoff }
+            if (lastStored.size > 10_000) lastStored.clear()
+        }
 
         lastPollMs = now
         lastPollVessels = records.size

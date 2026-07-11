@@ -21,14 +21,12 @@ class AdminWebServer(
     companion object {
         private const val TAG = "porttracker-service.AdminWeb"
     }
-    private var isRunning = false
     private val configManager = ConfigurationManager(service)
     private val updateManager = UpdateManager(service)
 
     override fun start() {
         try {
             super.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-            isRunning = true
             Log.i(TAG, "Admin Web Server started on port $port")
         } catch (e: IOException) {
             Log.e(TAG, "Failed to start Admin Web Server", e)
@@ -37,7 +35,10 @@ class AdminWebServer(
 
     override fun stop() {
         super.stop()
-        isRunning = false
+        // Detach the NMEA ring-buffer listener — otherwise every server
+        // restart (webviewer toggle, service restart) leaks one listener.
+        nmeaBufferListener?.let { AisReceiverService.removeNMEAListener(it) }
+        nmeaBufferListener = null
         Log.i(TAG, "Admin Web Server stopped")
     }
 
@@ -62,7 +63,7 @@ class AdminWebServer(
 
         // 1.5 NMEA buffer endpoint — returns recent NMEA as JSON array (polling-friendly)
         if (uri == "/api/nmea_buffer" || uri == "/admin/api/nmea_buffer") {
-            return handleNmeaBuffer()
+            return handleNmeaBuffer(session)
         }
 
         // 1.6 Direct NMEA SSE stream — bypasses C++ server, uses native NMEA callbacks
@@ -82,11 +83,20 @@ class AdminWebServer(
         val relativePath = if (uri == "/") "index.html" else uri.substring(1)
         val requestedFile = File(webDir, relativePath)
 
-        if (requestedFile.exists() && requestedFile.isFile) {
+        // Containment check: a crafted URI ("/../shared_prefs/….xml") must never
+        // escape the web root — filesDir holds credentials in shared_prefs.
+        val insideWebRoot = try {
+            requestedFile.canonicalPath.startsWith(webDir.canonicalPath + File.separator)
+        } catch (e: IOException) { false }
+
+        if (insideWebRoot && requestedFile.exists() && requestedFile.isFile) {
             return serveStaticFile(requestedFile)
         }
 
-        // 4. Fallback: Check APK assets/web
+        // 4. Fallback: Check APK assets/web (".." never allowed in asset paths)
+        if (relativePath.split('/').any { it == ".." }) {
+            return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "Forbidden")
+        }
         val assetPath = "web/$relativePath"
         try {
             val assetStream = service.assets.open(assetPath)
@@ -211,6 +221,12 @@ class AdminWebServer(
         // --- Health endpoint for remote dashboard monitoring ---
         if (session.method == Method.GET && session.uri == "/admin/api/health") {
             return handleHealth()
+        }
+
+        // Internal app log (tunnel status, generated remote credentials, FRP
+        // output). Auth-gated like every /admin endpoint except /health.
+        if (session.method == Method.GET && session.uri == "/admin/api/logs") {
+            return newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", InternalLog.getLogs())
         }
 
         // USB Permission request — triggers native Android permission dialog via service
@@ -549,11 +565,11 @@ class AdminWebServer(
     // ---- NMEA Ring Buffer for polling ----
     private val nmeaBuffer = java.util.concurrent.ConcurrentLinkedDeque<Pair<Long, String>>()
     private val nmeaSeq = java.util.concurrent.atomic.AtomicLong(0)
-    private var nmeaBufferListenerRegistered = false
+    private var nmeaBufferListener: AisReceiverService.Companion.NMEAListener? = null
 
+    @Synchronized
     private fun ensureNmeaBufferListener() {
-        if (nmeaBufferListenerRegistered) return
-        nmeaBufferListenerRegistered = true
+        if (nmeaBufferListener != null) return
         val listener = object : AisReceiverService.Companion.NMEAListener {
             override fun onNMEA(nmea: String) {
                 val lines = nmea.trim().split("\n").filter { it.isNotBlank() }
@@ -567,6 +583,7 @@ class AdminWebServer(
                 }
             }
         }
+        nmeaBufferListener = listener
         AisReceiverService.addNMEAListener(listener)
         Log.i(TAG, "NMEA buffer listener registered")
     }
@@ -574,21 +591,24 @@ class AdminWebServer(
     /**
      * GET /api/nmea_buffer?since=<seq>
      * Returns JSON: {"seq": <latest_seq>, "lines": ["!AIVDM,...", "!AIVDM,..."]}
-     * Client passes since=0 on first call, then since=<last_seq> on subsequent calls.
+     * Client passes since=0 (or nothing) on first call, then since=<last seq>
+     * on subsequent calls to receive only new sentences.
      */
-    private fun handleNmeaBuffer(): Response {
+    private fun handleNmeaBuffer(session: IHTTPSession): Response {
         ensureNmeaBufferListener()
-        val since = 0L // Simple: always return latest batch
-        // Actually parse 'since' from query — but NanoHTTPD doesn't parse query in serve()
-        // So we just return the last 50 lines
+        val since = parseQuery(session.queryParameterString)["since"]?.toLongOrNull() ?: 0L
         val snapshot = nmeaBuffer.toList()
-        val recent = snapshot.takeLast(50)
-        val latestSeq = recent.lastOrNull()?.first ?: 0L
+        val recent = (if (since > 0) snapshot.filter { it.first > since } else snapshot).takeLast(50)
+        // Advance the client's cursor even when nothing new arrived.
+        val latestSeq = snapshot.lastOrNull()?.first ?: since
 
-        val jsonLines = recent.joinToString(",") { "\"${it.second.replace("\"", "\\\"")}\"" }
-        val json = """{"seq":$latestSeq,"lines":[$jsonLines]}"""
+        // JSONArray handles escaping — NMEA tag blocks contain backslashes,
+        // which naive quote-only escaping turns into invalid JSON.
+        val lines = org.json.JSONArray()
+        for (p in recent) lines.put(p.second)
+        val json = JSONObject().apply { put("seq", latestSeq); put("lines", lines) }
 
-        val response = newFixedLengthResponse(Response.Status.OK, "application/json", json)
+        val response = newFixedLengthResponse(Response.Status.OK, "application/json", json.toString())
         response.addHeader("Cache-Control", "no-cache")
         return response
     }
@@ -598,47 +618,44 @@ class AdminWebServer(
         val pipedIn = java.io.PipedInputStream(pipedOut, 65536)
         val isOpen = java.util.concurrent.atomic.AtomicBoolean(true)
 
+        // Bounded hand-off: the native NMEA callback must NEVER block on a slow
+        // client (it would stall AIS decoding and every other listener, incl.
+        // MQTT). offer() drops sentences for THIS client when its pipe backs up.
+        val queue = java.util.concurrent.LinkedBlockingQueue<String>(512)
+
         val listener = object : AisReceiverService.Companion.NMEAListener {
             override fun onNMEA(nmea: String) {
-                if (!isOpen.get()) return
-                try {
-                    // SSE spec: each line of multiline data must be prefixed with "data:"
-                    val lines = nmea.trim().split("\n")
-                    val sseEvent = lines.joinToString("\n") { "data: ${it.trim()}" } + "\n\n"
-                    synchronized(pipedOut) {
-                        pipedOut.write(sseEvent.toByteArray())
-                        pipedOut.flush()
-                    }
-                } catch (e: Exception) {
-                    isOpen.set(false)
-                    AisReceiverService.removeNMEAListener(this)
-                    try { pipedOut.close() } catch (_: Exception) {}
-                }
+                if (isOpen.get()) queue.offer(nmea)
             }
         }
-
         AisReceiverService.addNMEAListener(listener)
         Log.i(TAG, "NMEA SSE client connected")
 
-        // Heartbeat thread to keep the connection alive and detect disconnects
-        Thread {
+        // Single writer thread per client: drains the queue into the pipe and
+        // doubles as heartbeat (poll timeout). Only this thread can block; a
+        // broken pipe surfaces here as IOException → cleanup.
+        Thread({
             try {
                 while (isOpen.get()) {
-                    Thread.sleep(3000)
-                    synchronized(pipedOut) {
-                        pipedOut.write(": heartbeat\n\n".toByteArray())
-                        pipedOut.flush()
+                    val nmea = queue.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+                    val payload = if (nmea == null) {
+                        ": heartbeat\n\n"
+                    } else {
+                        // SSE spec: each line of multiline data prefixed with "data:"
+                        nmea.trim().split("\n").joinToString("\n") { "data: ${it.trim()}" } + "\n\n"
                     }
+                    pipedOut.write(payload.toByteArray())
+                    pipedOut.flush()
                 }
             } catch (e: Exception) {
-                // Client disconnected
+                // Client disconnected or interrupted
             } finally {
                 isOpen.set(false)
                 AisReceiverService.removeNMEAListener(listener)
                 try { pipedOut.close() } catch (_: Exception) {}
                 Log.i(TAG, "NMEA SSE client disconnected")
             }
-        }.start()
+        }, "NmeaSseWriter").start()
 
         val response = newChunkedResponse(
             Response.Status.OK,

@@ -31,9 +31,9 @@ class AisReceiverService : Service() {
         // Single lock to prevent concurrent native execution across service restarts
         private val serviceLock = java.util.concurrent.locks.ReentrantLock()
 
-        // Callbacks from native code (called via AisCatcherJava bridge)
+        // Callbacks from native code (called via AisCatcherJava bridge).
+        // Hot path — runs for every decoded sentence; no logging here.
         @JvmStatic fun onNMEA(nmea: String) {
-            Log.d(TAG, "NMEA: $nmea")
             incrementMessageCount()
             nmeaListeners.forEach { it.onNMEA(nmea) }
         }
@@ -78,6 +78,7 @@ class AisReceiverService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    @Volatile private var lastNotificationText: String? = null
     private var receiverThread: Thread? = null
     private val shouldStop = AtomicBoolean(false)
     private val restartRequested = AtomicBoolean(false)
@@ -143,6 +144,11 @@ class AisReceiverService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Enter foreground FIRST — after startForegroundService() Android kills
+        // the process unless startForeground() is called promptly, and the USB
+        // scan below can be slow. Re-posting when already running is harmless.
+        startForegroundWithNotification(lastNotificationText ?: "Starting AIS Receiver...")
+
         synchronized(startLock) {
             // Check if service is already running
             if (isRunning && receiverThread?.isAlive == true) {
@@ -161,24 +167,25 @@ class AisReceiverService : Service() {
                     } else {
                         Log.w(TAG, "USB device found but could not open (permission issue?)")
                     }
-                    return START_NOT_STICKY
+                    return START_STICKY
                 }
                 Log.w(TAG, "Service already running, ignoring start command")
-                return START_NOT_STICKY
+                return START_STICKY
             }
-            
+
             Log.i(TAG, "Service starting...")
-        
+
         // Get configuration from intent or preferences
         val config = loadConfig()
         currentSource = intent?.getIntExtra("SOURCE", config.deviceType.ordinal) ?: config.deviceType.ordinal
-        
-        
+
+
         // Open USB device - try intent first, then scan for SDR
         var vendorId = intent?.getIntExtra("USB_VENDOR_ID", -1) ?: -1
         var productId = intent?.getIntExtra("USB_PRODUCT_ID", -1) ?: -1
-        
+
         // Fallback: scan for SDR device if not specified in intent
+        // (also the path taken on a STICKY restart, where intent is null)
         if (vendorId <= 0 || productId <= 0) {
             Log.i(TAG, "No USB IDs in intent, scanning for SDR device...")
             val deviceInfo = UsbDeviceScanner.scanForDevices(this)
@@ -188,22 +195,15 @@ class AisReceiverService : Service() {
                 Log.i(TAG, "Found SDR via scan: vendor=$vendorId, product=$productId")
             }
         }
-        
+
         fileDescriptor = if (vendorId > 0 && productId > 0) {
             openUsbDevice(vendorId, productId)
         } else {
             -1
         }
-        
+
         Log.i(TAG, "USB fd=$fileDescriptor (vendor=$vendorId, product=$productId)")
-        
-        // Start foreground with type for Android 14+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, createNotification("Starting AIS Receiver..."), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, createNotification("Starting AIS Receiver..."))
-        }
-        
+
         // Acquire wake lock
         acquireWakeLock()
         
@@ -249,7 +249,9 @@ class AisReceiverService : Service() {
 
         isRunning = true
         } // end synchronized(startLock)
-        return START_NOT_STICKY  // Don't auto-restart without USB IDs
+        // STICKY: unattended stations must come back after a process kill.
+        // The null restart intent is handled by the USB-scan fallback above.
+        return START_STICKY
     }
     
     private var usbConnection: android.hardware.usb.UsbDeviceConnection? = null
@@ -562,35 +564,6 @@ class AisReceiverService : Service() {
         }
     }
     
-    /**
-     * Schedule a full service restart. This creates a clean native library state
-     * by stopping the current service and starting a new one after a delay.
-     * This avoids the SIGSEGV that occurs when re-calling InitNative in the same process.
-     */
-    private fun scheduleServiceRestart(delayMs: Long) {
-        Log.i(TAG, "Scheduling service restart in ${delayMs}ms...")
-        
-        val restartIntent = Intent(this, AisReceiverService::class.java).apply {
-            putExtra("USB_VENDOR_ID", 0)   // Will be re-scanned
-            putExtra("USB_PRODUCT_ID", 0)  // Will be re-scanned
-        }
-        
-        val pendingIntent = android.app.PendingIntent.getForegroundService(
-            this, 42, restartIntent,
-            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        
-        val alarmManager = getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
-        alarmManager.setExactAndAllowWhileIdle(
-            android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            android.os.SystemClock.elapsedRealtime() + delayMs,
-            pendingIntent
-        )
-        
-        // Stop this service (kills the process, freeing native resources)
-        stopSelf()
-    }
-
     private fun runNativeEngine(config: ServiceConfig, source: Int, fd: Int) {
         try {
             if (!AisCatcherJava.isLibraryLoaded) {
@@ -817,7 +790,16 @@ class AisReceiverService : Service() {
         }
     }
 
+    private fun startForegroundWithNotification(text: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, createNotification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, createNotification(text))
+        }
+    }
+
     private fun createNotification(text: String): Notification {
+        lastNotificationText = text
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, SettingsActivity::class.java),

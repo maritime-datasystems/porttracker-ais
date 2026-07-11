@@ -29,6 +29,10 @@ class MqttPublisher(private val context: Context) {
         private const val CLIENT_ID_PREFIX = "porttracker-"
         private const val CONNECT_TIMEOUT_SEC = 30
         private const val KEEP_ALIVE_SEC = 60
+        // Sentences buffered across broker reconnects (~a few minutes of a busy port)
+        private const val PENDING_QUEUE_CAP = 2000
+        // Paho default is 10 in-flight QoS-1 publishes — far too low for AIS burst rates
+        private const val MAX_INFLIGHT = 100
 
         @Volatile
         var isConnected = false
@@ -68,7 +72,9 @@ class MqttPublisher(private val context: Context) {
 
     private var client: MqttAsyncClient? = null
     private var config: Config? = null
-    private val pendingMessages = ConcurrentLinkedQueue<String>()
+    // Bounded: survives broker reconnects without growing unbounded if the
+    // outage lasts. When full, the oldest sentences are dropped first.
+    private val pendingMessages = LinkedBlockingQueue<String>(PENDING_QUEUE_CAP)
     private var batchExecutor: ScheduledExecutorService? = null
     private val lifecycleLock = Object()
 
@@ -134,17 +140,22 @@ class MqttPublisher(private val context: Context) {
     }
 
     /**
-     * Queue an NMEA sentence for publishing. Thread-safe.
+     * Queue an NMEA sentence for publishing. Thread-safe, never blocks.
+     * Data is queued even while the broker reconnects (Paho auto-reconnect);
+     * when the bounded queue fills, the oldest sentence is dropped.
      */
     fun publishNmea(nmea: String) {
-        if (!isConnected) return
-        pendingMessages.add(nmea)
+        if (client == null) return
+        while (!pendingMessages.offer(nmea)) {
+            pendingMessages.poll()
+        }
     }
 
     /**
      * Drain the pending queue, format, and publish.
      */
     private fun flushBatch() {
+        if (!isConnected) return  // keep messages queued through a reconnect
         val batch = mutableListOf<String>()
         while (pendingMessages.isNotEmpty()) {
             pendingMessages.poll()?.let { batch.add(it) }
@@ -238,6 +249,7 @@ class MqttPublisher(private val context: Context) {
             isAutomaticReconnect = true
             connectionTimeout = CONNECT_TIMEOUT_SEC
             keepAliveInterval = KEEP_ALIVE_SEC
+            maxInflight = MAX_INFLIGHT
 
             if (config.username.isNotEmpty()) {
                 userName = config.username
