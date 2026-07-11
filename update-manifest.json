@@ -1,8 +1,8 @@
 {
-  "version_code": 22,
-  "version_name": "3.0-0620",
-  "apk_url": "https://github.com/maritime-datasystems/porttracker-aiscatcher/releases/download/v22/porttracker-ais.apk",
-  "apk_size": 0,
-  "release_notes": "Current release — MQTT topic auto-construction, OTA update support.",
+  "version_code": 23,
+  "version_name": "3.0-0711-2121",
+  "apk_url": "https://github.com/maritime-datasystems/porttracker-aiscatcher/releases/download/v23/porttracker-ais.apk",
+  "apk_size": 29394571,
+  "release_notes": "Security & reliability audit: web server path traversal fix, SSE can no longer stall AIS decoding, MQTT survives broker reconnects without dropping data, service auto-restarts after process kill, internal log viewable at /admin/api/logs.",
   "min_version_code": 18
 }
