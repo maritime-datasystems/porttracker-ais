@@ -318,9 +318,14 @@ object PorttrackerAuth {
     }
 
     /**
-     * Stable per-device station hostname: the user-chosen station name if
-     * set, else a generated one persisted on first use so repeated logins
-     * (and reinstalls of the same config) reuse the same station.
+     * Stable per-device station hostname, persisted on first use so repeated
+     * logins (and reinstalls of the same config) reuse the same station.
+     *
+     * One account can run any number of stations, so the hostname must be
+     * unique PER DEVICE even when the user gives two of their devices the
+     * same station name - a short device suffix guarantees that. Matching by
+     * this hostname is what makes login idempotent for each device while
+     * never touching the user's other stations.
      */
     @SuppressLint("HardwareIds")
     fun stationHostname(context: Context): String {
@@ -328,13 +333,15 @@ object PorttrackerAuth {
             .getDefaultSharedPreferences(context)
         prefs.getString("sharing_station_hostname", "")!!.ifBlank { null }
             ?.let { return it }
+        val androidId = android.provider.Settings.Secure.getString(
+            context.contentResolver,
+            android.provider.Settings.Secure.ANDROID_ID) ?: "unknown"
         val custom = prefs.getString("pref_station_name", "")!!.trim()
         val hostname = if (custom.isNotBlank()) {
-            custom.lowercase().replace(Regex("[^a-z0-9-]+"), "-").trim('-')
+            val slug = custom.lowercase()
+                .replace(Regex("[^a-z0-9-]+"), "-").trim('-')
+            "$slug-${androidId.takeLast(4)}"
         } else {
-            val androidId = android.provider.Settings.Secure.getString(
-                context.contentResolver,
-                android.provider.Settings.Secure.ANDROID_ID) ?: "unknown"
             "aiscatcher-$androidId"
         }
         prefs.edit().putString("sharing_station_hostname", hostname).apply()
@@ -380,11 +387,13 @@ object PorttrackerAuth {
             .putString("mqtt_topic_json", s.aisJsonTopic)
             .putString("mqtt_format", "aisc-json")
             .putString("mqtt_station_name", s.hostname)
-            .putString("pref_station_name", s.hostname)
             .putInt("mqtt_antenna_id", s.stationId)
             .putString("sharing_station_hostname", s.hostname)
             .putInt("sharing_station_id", s.stationId)
             .apply()
+        // Deliberately NOT touching pref_station_name: that's the user's
+        // display name for this device and may be shared wording across
+        // their stations - the sharing hostname above is the unique key.
     }
 
     // ------------------------------------------------------------------

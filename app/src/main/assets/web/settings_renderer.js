@@ -558,11 +558,15 @@ var SettingsRenderer = {
             <!-- Sign in with the TrustedDocks / Porttracker account -->
             <div class="card mb-3 border-primary">
                 <div class="card-body">
-                    <h6 class="card-title"><i class="bi bi-person-check"></i> Sign in &amp; Auto-Provision</h6>
+                    <h6 class="card-title"><i class="bi bi-person-check"></i> Sign in &amp; Auto-Provision <span class="badge bg-secondary">optional</span></h6>
                     <p class="text-muted" style="font-size:0.85em">
-                        Sign in with your TrustedDocks / Porttracker account. A data-sharing
-                        station is created (or reused) for this device automatically —
-                        no keys to copy. One account can run several stations.
+                        The receiver, local dashboard, database and UDP/TCP outputs all work
+                        <strong>without an account</strong>. Sign in with your TrustedDocks /
+                        Porttracker account only if you want to feed your AIS data to
+                        Porttracker and see your station's statistics in your account.
+                        A data-sharing station is created (or reused) for this device
+                        automatically — no keys to copy. One account can run any number of
+                        stations; every device gets its own.
                     </p>
                     <button id="auth-login-btn" class="btn btn-primary" onclick="SettingsRenderer.startAuthLogin()">
                         <i class="bi bi-box-arrow-in-right"></i> Sign in with TrustedDocks
