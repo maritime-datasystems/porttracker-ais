@@ -554,7 +554,25 @@ var SettingsRenderer = {
 
         return `
             <h5><i class="bi bi-cloud-arrow-up"></i> TrustedDocks Gateway</h5>
-            
+
+            <!-- Sign in with the TrustedDocks / Porttracker account -->
+            <div class="card mb-3 border-primary">
+                <div class="card-body">
+                    <h6 class="card-title"><i class="bi bi-person-check"></i> Sign in &amp; Auto-Provision</h6>
+                    <p class="text-muted" style="font-size:0.85em">
+                        Sign in with your TrustedDocks / Porttracker account. A data-sharing
+                        station is created (or reused) for this device automatically —
+                        no keys to copy. One account can run several stations.
+                    </p>
+                    <button id="auth-login-btn" class="btn btn-primary" onclick="SettingsRenderer.startAuthLogin()">
+                        <i class="bi bi-box-arrow-in-right"></i> Sign in with TrustedDocks
+                    </button>
+                    <button id="auth-cancel-btn" class="btn btn-outline-secondary ms-2" style="display:none"
+                        onclick="SettingsRenderer.cancelAuthLogin()">Cancel</button>
+                    <div id="auth-login-status" class="mt-3"></div>
+                </div>
+            </div>
+
             <!-- Quick Setup via Paste Config -->
             <div class="card mb-3">
                 <div class="card-body">
@@ -865,6 +883,85 @@ var SettingsRenderer = {
 
         } catch (e) {
             console.error('Failed to refresh gateway status:', e);
+        }
+    },
+
+    _authPollTimer: null,
+
+    startAuthLogin: async function () {
+        const statusEl = document.getElementById('auth-login-status');
+        const loginBtn = document.getElementById('auth-login-btn');
+        const cancelBtn = document.getElementById('auth-cancel-btn');
+        try {
+            loginBtn.disabled = true;
+            const response = await fetch('/admin/api/auth/start', { method: 'POST' });
+            const s = await response.json();
+            this._renderAuthStatus(s);
+            if (s.state === 'pending') {
+                cancelBtn.style.display = '';
+                if (this._authPollTimer) clearInterval(this._authPollTimer);
+                this._authPollTimer = setInterval(() => this.pollAuthStatus(), 3000);
+            } else {
+                loginBtn.disabled = false;
+            }
+        } catch (e) {
+            loginBtn.disabled = false;
+            if (statusEl) statusEl.innerHTML =
+                '<div class="alert alert-danger py-2">' + e.message + '</div>';
+        }
+    },
+
+    pollAuthStatus: async function () {
+        try {
+            const response = await fetch('/admin/api/auth/status');
+            const s = await response.json();
+            this._renderAuthStatus(s);
+            if (s.state === 'provisioned' || s.state === 'error' || s.state === 'idle') {
+                clearInterval(this._authPollTimer);
+                this._authPollTimer = null;
+                document.getElementById('auth-login-btn').disabled = false;
+                document.getElementById('auth-cancel-btn').style.display = 'none';
+                if (s.state === 'provisioned') {
+                    // Show the freshly persisted credentials/topics + MQTT state.
+                    setTimeout(() => { this.refreshGatewayStatus(); }, 2500);
+                }
+            }
+        } catch (e) {
+            console.error('auth status poll failed', e);
+        }
+    },
+
+    cancelAuthLogin: async function () {
+        try { await fetch('/admin/api/auth/cancel', { method: 'POST' }); } catch (e) { }
+        if (this._authPollTimer) { clearInterval(this._authPollTimer); this._authPollTimer = null; }
+        document.getElementById('auth-login-btn').disabled = false;
+        document.getElementById('auth-cancel-btn').style.display = 'none';
+        const statusEl = document.getElementById('auth-login-status');
+        if (statusEl) statusEl.innerHTML = '';
+    },
+
+    _renderAuthStatus: function (s) {
+        const el = document.getElementById('auth-login-status');
+        if (!el) return;
+        if (s.state === 'pending') {
+            el.innerHTML =
+                '<div class="alert alert-info py-2">' +
+                '<div>Open <a href="' + s.verification_uri + '" target="_blank" rel="noopener">' +
+                'this link</a> on any device and confirm the code:</div>' +
+                '<div class="fs-3 fw-bold font-monospace text-center my-2">' + s.user_code + '</div>' +
+                '<div class="text-muted" style="font-size:0.85em">Waiting for you to sign in…</div>' +
+                '</div>';
+        } else if (s.state === 'provisioning') {
+            el.innerHTML = '<div class="alert alert-info py-2">Signed in — provisioning your station…</div>';
+        } else if (s.state === 'provisioned') {
+            el.innerHTML =
+                '<div class="alert alert-success py-2"><i class="bi bi-check-circle"></i> ' +
+                (s.message || ('Station #' + s.station_id + ' connected.')) +
+                ' Data publishing starts automatically.</div>';
+        } else if (s.state === 'error') {
+            el.innerHTML = '<div class="alert alert-danger py-2">' + (s.message || 'Login failed.') + '</div>';
+        } else {
+            el.innerHTML = '';
         }
     },
 

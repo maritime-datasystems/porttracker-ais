@@ -218,6 +218,22 @@ class AdminWebServer(
             return handleGatewayStatus()
         }
 
+        // --- Auth0 device login + station auto-provisioning ---
+
+        if (session.method == Method.POST && session.uri == "/admin/api/auth/start") {
+            return handleAuthStart()
+        }
+
+        if (session.method == Method.GET && session.uri == "/admin/api/auth/status") {
+            return handleAuthStatus()
+        }
+
+        if (session.method == Method.POST && session.uri == "/admin/api/auth/cancel") {
+            PorttrackerAuth.cancel()
+            return newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"success":true}""")
+        }
+
         // --- Health endpoint for remote dashboard monitoring ---
         if (session.method == Method.GET && session.uri == "/admin/api/health") {
             return handleHealth()
@@ -866,6 +882,53 @@ class AdminWebServer(
                 JSONObject().apply { put("success", false); put("error", e.message ?: "Unknown") }.toString())
         }
     }
+
+    /**
+     * POST /admin/api/auth/start
+     *
+     * Begin the Auth0 device-code login. Returns the code the user must
+     * confirm in a browser; the provisioning continues in the background and
+     * is observable via GET /admin/api/auth/status.
+     */
+    private fun handleAuthStart(): Response {
+        val result = PorttrackerAuth.startLogin(service)
+        return newFixedLengthResponse(
+            Response.Status.OK, "application/json", authStatusJson(result))
+    }
+
+    /** GET /admin/api/auth/status - poll the login/provisioning state. */
+    private fun handleAuthStatus(): Response {
+        val result = PorttrackerAuth.currentStatus()
+        // Once provisioning finished, make the new credentials effective.
+        if (result.state == PorttrackerAuth.State.PROVISIONED
+                && !authRestartDone) {
+            authRestartDone = true
+            Thread {
+                try {
+                    service.restartMqttPublisher()
+                } catch (e: Exception) {
+                    Log.e(TAG, "MQTT restart after login failed", e)
+                }
+            }.start()
+        }
+        if (result.state == PorttrackerAuth.State.PENDING) {
+            authRestartDone = false
+        }
+        return newFixedLengthResponse(
+            Response.Status.OK, "application/json", authStatusJson(result))
+    }
+
+    private var authRestartDone = false
+
+    private fun authStatusJson(s: PorttrackerAuth.Status): String =
+        JSONObject().apply {
+            put("state", s.state.name.lowercase())
+            put("user_code", s.userCode ?: JSONObject.NULL)
+            put("verification_uri", s.verificationUri ?: JSONObject.NULL)
+            put("message", s.message ?: JSONObject.NULL)
+            put("station_id", s.stationId ?: JSONObject.NULL)
+            put("station_hostname", s.stationHostname ?: JSONObject.NULL)
+        }.toString()
 
     /**
      * POST /admin/api/mqtt/restart
