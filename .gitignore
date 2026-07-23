@@ -23,3 +23,4 @@ Thumbs.db
 # FRP client binary — not committed (~40 MB per ABI).
 # Fetch with scripts/fetch-frpc.sh before building remote access. See README.
 app/src/main/jniLibs/*/libfrpc.so
+screens/
