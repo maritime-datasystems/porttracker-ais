@@ -37,6 +37,9 @@ object PorttrackerAuth {
     private const val READ_TIMEOUT = 15000
 
     const val DEFAULT_AUTH0_DOMAIN = "login.trusteddocks.com"
+    // "PortTracker AIS Feeder" native app on the trusteddocks tenant
+    // (device-code grant; public client, so this id is not a secret).
+    const val DEFAULT_AUTH0_CLIENT_ID = "wOdIJ2QHiFlb7m0Dhm6Fxb2Tt46DeeLf"
     const val DEFAULT_API_BASE = "https://api-gateway.porttracker.co/api"
 
     enum class State { IDLE, PENDING, PROVISIONING, PROVISIONED, ERROR }
@@ -77,14 +80,8 @@ object PorttrackerAuth {
             .getDefaultSharedPreferences(context)
         val domain = prefs.getString("auth0_domain", DEFAULT_AUTH0_DOMAIN)!!
             .ifBlank { DEFAULT_AUTH0_DOMAIN }
-        val clientId = prefs.getString("auth0_client_id", "") ?: ""
-        if (clientId.isBlank()) {
-            status = Status(
-                State.ERROR,
-                message = "auth0_client_id is not configured. Set it on the "
-                    + "Settings page (Auth0 native app client ID).")
-            return status
-        }
+        val clientId = prefs.getString("auth0_client_id", "")!!
+            .ifBlank { DEFAULT_AUTH0_CLIENT_ID }
 
         cancel()  // Drop any previous attempt.
         cancelled = false
