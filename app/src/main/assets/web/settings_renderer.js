@@ -26,6 +26,10 @@ var SettingsRenderer = {
                 }
             } catch (e2) { /* status fetch is best-effort */ }
             this.render();
+            // A sign-in may be in flight from before a page reload (the
+            // Custom Tab sign-in returns here via a WebView reload) — pick
+            // its status back up so the card doesn't silently go blank.
+            this.resumeAuthStatus();
         } catch (e) {
             const errorDiv = document.createElement('div');
             errorDiv.className = 'alert alert-danger';
@@ -59,7 +63,7 @@ var SettingsRenderer = {
                     <button class="nav-link" id="tab-app" data-bs-toggle="tab" data-bs-target="#pane-app" type="button"><i class="bi bi-gear-wide-connected"></i> App</button>
                 </li>
                 <li class="nav-item">
-                    <button class="nav-link" id="tab-porttracker" data-bs-toggle="tab" data-bs-target="#pane-porttracker" type="button">TrustedDocks</button>
+                    <button class="nav-link" id="tab-porttracker" data-bs-toggle="tab" data-bs-target="#pane-porttracker" type="button">Account</button>
                 </li>
                 <li class="nav-item">
                     <button class="nav-link" id="tab-database" data-bs-toggle="tab" data-bs-target="#pane-database" type="button">Internal DB</button>
@@ -335,6 +339,69 @@ var SettingsRenderer = {
 
         html += `
             <hr>
+            <h5><i class="bi bi-broadcast"></i> Chartplotter Output</h5>
+            <p class="text-muted small">
+                Make this station appear as an AIS + GPS instrument on your network,
+                for OpenCPN, Navionics and other chartplotter apps. Choose classic
+                NMEA 0183 sentences or NMEA 2000 emulation (Yacht Devices RAW or
+                SeaSmart $PCDIN framing).
+            </p>
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>NMEA Network Output</span>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="nmea_out_enabled" ${this.bool('nmea_out_enabled') ? 'checked' : ''}>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Protocol</label>
+                        <select class="form-select" id="nmea_out_format">
+                            <option value="nmea0183" ${this.val('nmea_out_format', 'nmea0183') === 'nmea0183' ? 'selected' : ''}>NMEA 0183 (AIS !AIVDM + GPS RMC/GGA)</option>
+                            <option value="n2k-ydraw" ${this.val('nmea_out_format', 'nmea0183') === 'n2k-ydraw' ? 'selected' : ''}>NMEA 2000 — Yacht Devices RAW (experimental)</option>
+                            <option value="n2k-pcdin" ${this.val('nmea_out_format', 'nmea0183') === 'n2k-pcdin' ? 'selected' : ''}>NMEA 2000 — SeaSmart $PCDIN (experimental)</option>
+                        </select>
+                    </div>
+                    <div class="row mb-2">
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="nmea_out_tcp_enabled" ${this.bool('nmea_out_tcp_enabled', true) ? 'checked' : ''}>
+                                <label class="form-check-label" for="nmea_out_tcp_enabled">TCP server (apps connect to this phone)</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">TCP Port</label>
+                            <input type="number" class="form-control" id="nmea_out_tcp_port" value="${this.val('nmea_out_tcp_port', '10110')}">
+                        </div>
+                    </div>
+                    <div class="row mb-2">
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="nmea_out_udp_enabled" ${this.bool('nmea_out_udp_enabled') ? 'checked' : ''}>
+                                <label class="form-check-label" for="nmea_out_udp_enabled">UDP broadcast</label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">UDP Target</label>
+                            <input type="text" class="form-control" id="nmea_out_udp_host" value="${this.val('nmea_out_udp_host', '255.255.255.255')}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">UDP Port</label>
+                            <input type="number" class="form-control" id="nmea_out_udp_port" value="${this.val('nmea_out_udp_port', '10110')}">
+                        </div>
+                    </div>
+                    <div class="form-check form-switch mb-2">
+                        <input class="form-check-input" type="checkbox" id="nmea_out_gps" ${this.bool('nmea_out_gps', true) ? 'checked' : ''}>
+                        <label class="form-check-label" for="nmea_out_gps">Include this phone's position as own-ship GPS</label>
+                    </div>
+                    <p class="text-muted mb-0" style="font-size:0.8em">
+                        In your chartplotter app add a network connection to this
+                        phone's IP, e.g. TCP port 10110 (255.255.255.255 sends a UDP
+                        broadcast to the whole WiFi network).
+                    </p>
+                </div>
+            </div>
+
             <h5>GPSD Forwarding</h5>
             <div class="mb-3 form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="gpsd_enabled" ${this.bool('gpsd_enabled') ? 'checked' : ''}>
@@ -553,23 +620,26 @@ var SettingsRenderer = {
         const topicsAssigned = mqttTopicRaw || mqttTopicJson;
 
         return `
-            <h5><i class="bi bi-cloud-arrow-up"></i> TrustedDocks Gateway</h5>
+            <h5><i class="bi bi-cloud-arrow-up"></i> PortTracker / TrustedDocks Account</h5>
 
-            <!-- Sign in with the TrustedDocks / Porttracker account -->
+            <!-- Sign in with the PortTracker / TrustedDocks account -->
             <div class="card mb-3 border-primary">
                 <div class="card-body">
                     <h6 class="card-title"><i class="bi bi-person-check"></i> Sign in &amp; Auto-Provision <span class="badge bg-secondary">optional</span></h6>
                     <p class="text-muted" style="font-size:0.85em">
-                        The receiver, local dashboard, database and UDP/TCP outputs all work
-                        <strong>without an account</strong>. Sign in with your TrustedDocks /
-                        Porttracker account only if you want to feed your AIS data to
-                        Porttracker and see your station's statistics in your account.
-                        A data-sharing station is created (or reused) for this device
-                        automatically — no keys to copy. One account can run any number of
-                        stations; every device gets its own.
+                        <strong>No account needed:</strong> the receiver, local dashboard,
+                        map, database and UDP/TCP outputs all work standalone. Sign in only
+                        if you want to share your AIS data and see your station's
+                        statistics online. One login works for both
+                        <strong>PortTracker</strong> (porttracker.co) and
+                        <strong>TrustedDocks</strong> (trusteddocks.com) — use whichever
+                        account you already have, or create one for free during sign-in.
+                        Your data-sharing station is set up automatically — no keys to
+                        copy. One account can run any number of stations; every device
+                        gets its own.
                     </p>
                     <button id="auth-login-btn" class="btn btn-primary" onclick="SettingsRenderer.startAuthLogin()">
-                        <i class="bi bi-box-arrow-in-right"></i> Sign in with TrustedDocks
+                        <i class="bi bi-box-arrow-in-right"></i> Sign in with PortTracker / TrustedDocks
                     </button>
                     <button id="auth-cancel-btn" class="btn btn-outline-secondary ms-2" style="display:none"
                         onclick="SettingsRenderer.cancelAuthLogin()">Cancel</button>
@@ -746,7 +816,8 @@ var SettingsRenderer = {
         return this.currentConfig[key] !== undefined ? this.currentConfig[key] : defaultVal;
     },
 
-    bool: function (key) {
+    bool: function (key, defaultVal = false) {
+        if (this.currentConfig[key] === undefined) return defaultVal;
         return this.currentConfig[key] === true || this.currentConfig[key] === 'true';
     },
 
@@ -786,6 +857,16 @@ var SettingsRenderer = {
         collect('gpsd_host');
         collect('gpsd_port', 'int');
         collect('gpsd_interval');
+
+        // Chartplotter NMEA network output
+        collect('nmea_out_enabled', 'bool');
+        collect('nmea_out_format');
+        collect('nmea_out_tcp_enabled', 'bool');
+        collect('nmea_out_tcp_port');
+        collect('nmea_out_udp_enabled', 'bool');
+        collect('nmea_out_udp_host');
+        collect('nmea_out_udp_port');
+        collect('nmea_out_gps', 'bool');
 
         for (let i = 1; i <= 4; i++) {
             collect(`udp${i}_enabled`, 'bool');
@@ -915,6 +996,24 @@ var SettingsRenderer = {
         }
     },
 
+    /** Re-attach to an in-flight device-code login after a page (re)load. */
+    resumeAuthStatus: async function () {
+        try {
+            const response = await fetch('/admin/api/auth/status');
+            const s = await response.json();
+            if (!s.state || s.state === 'idle') return;
+            this._renderAuthStatus(s);
+            if (s.state === 'pending' || s.state === 'provisioning') {
+                const loginBtn = document.getElementById('auth-login-btn');
+                const cancelBtn = document.getElementById('auth-cancel-btn');
+                if (loginBtn) loginBtn.disabled = true;
+                if (cancelBtn) cancelBtn.style.display = '';
+                if (this._authPollTimer) clearInterval(this._authPollTimer);
+                this._authPollTimer = setInterval(() => this.pollAuthStatus(), 3000);
+            }
+        } catch (e) { /* best-effort */ }
+    },
+
     pollAuthStatus: async function () {
         try {
             const response = await fetch('/admin/api/auth/status');
@@ -950,10 +1049,14 @@ var SettingsRenderer = {
         if (s.state === 'pending') {
             el.innerHTML =
                 '<div class="alert alert-info py-2">' +
-                '<div>Open <a href="' + s.verification_uri + '" target="_blank" rel="noopener">' +
-                'this link</a> on any device and confirm the code:</div>' +
+                '<div><a href="' + s.verification_uri + '" target="_blank" rel="noopener" class="alert-link">' +
+                '<i class="bi bi-box-arrow-up-right"></i> Tap here to sign in</a> with your ' +
+                'PortTracker or TrustedDocks account. The sign-in page opens right here ' +
+                'in the app — check that it shows this code:</div>' +
                 '<div class="fs-3 fw-bold font-monospace text-center my-2">' + s.user_code + '</div>' +
-                '<div class="text-muted" style="font-size:0.85em">Waiting for you to sign in…</div>' +
+                '<div class="text-muted" style="font-size:0.85em">Tip: you can also open the ' +
+                'link on another device (e.g. your laptop) and enter the code there. ' +
+                'Waiting for you to sign in…</div>' +
                 '</div>';
         } else if (s.state === 'provisioning') {
             el.innerHTML = '<div class="alert alert-info py-2">Signed in — provisioning your station…</div>';

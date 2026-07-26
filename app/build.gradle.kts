@@ -14,7 +14,7 @@ android {
         applicationId = "com.porttracker.ais"
         minSdk = 23
         targetSdk = 34
-        versionCode = 23
+        versionCode = 24
         versionName = "3.0-${LocalDateTime.now().format(DateTimeFormatter.ofPattern("MMdd-HHmm"))}"
 
         ndk {
@@ -58,6 +58,7 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.browser:browser:1.7.0")
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.preference:preference-ktx:1.2.1")
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")

@@ -183,6 +183,7 @@
             <li><a href="#" onclick="showSection('nmea', this)">NMEA</a></li>
             <li><a href="#" onclick="showSection('db', this)">DB</a></li>
             <li><a href="#" onclick="showSection('logs', this)">Logs</a></li>
+            <li><a href="#" onclick="showSection('doctor', this)">🩺 Doctor</a></li>
         </ul>
     </nav>
 
@@ -354,6 +355,20 @@
                 <p>Coming Soon...</p>
             </div>
         </section>
+
+        <section id="doctor">
+            <div class="card">
+                <h2>🩺 Station Doctor</h2>
+                <p style="color:#666; font-size:14px;">Checks your station for common
+                    problems: missing permissions, no internet, missing USB receiver,
+                    battery settings and more.</p>
+                <button onclick="runDoctor()" id="doctor_run_btn"
+                    style="background:#005f73;color:#fff;border:none;border-radius:6px;padding:10px 18px;font-size:14px;cursor:pointer;">
+                    ▶ Run checks
+                </button>
+                <div id="doctor_results" style="margin-top:16px;"></div>
+            </div>
+        </section>
     </main>
 
     <script>
@@ -362,6 +377,66 @@
             const div = document.createElement('div');
             div.textContent = str;
             return div.innerHTML;
+        }
+
+        // --- Station Doctor ---
+        const DOCTOR_FIXES = {
+            usb_permission:      { label: 'Grant USB permission',   fn: 'requestUsbPermission' },
+            location_permission: { label: 'Grant location access',  fn: 'requestLocationPermission' },
+            location_settings:   { label: 'Open location settings', fn: 'openLocationSettings' },
+            battery_settings:    { label: 'Fix battery setting',    fn: 'openBatterySettings' },
+            wifi_settings:       { label: 'Open WiFi settings',     fn: 'openWifiSettings' },
+            app_settings:        { label: 'Open app settings',      fn: 'openAppSettings' },
+        };
+
+        function doctorFix(action) {
+            const fix = DOCTOR_FIXES[action];
+            if (!fix) return;
+            if (typeof Android !== 'undefined' && typeof Android[fix.fn] === 'function') {
+                Android[fix.fn]();
+                // Re-run after the user handled the system dialog/settings
+                setTimeout(runDoctor, 4000);
+            } else {
+                alert('This fix is only available inside the app on the phone itself.');
+            }
+        }
+
+        async function runDoctor() {
+            const btn = document.getElementById('doctor_run_btn');
+            const box = document.getElementById('doctor_results');
+            if (btn) btn.disabled = true;
+            box.innerHTML = '<p style="color:#666;">Running checks…</p>';
+            try {
+                const res = await fetch('/admin/api/doctor');
+                const data = await res.json();
+                const icons = { ok: '✅', warn: '⚠️', fail: '❌', off: '⚪' };
+                let fails = 0, warns = 0;
+                let html = '<table style="width:100%;border-collapse:collapse;font-size:14px;">';
+                for (const c of data.checks) {
+                    if (c.status === 'fail') fails++;
+                    if (c.status === 'warn') warns++;
+                    const fix = c.fix && DOCTOR_FIXES[c.fix]
+                        ? `<button onclick="doctorFix('${c.fix}')" style="background:#0a9396;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;white-space:nowrap;">${DOCTOR_FIXES[c.fix].label}</button>`
+                        : '';
+                    html += `<tr style="border-bottom:1px solid #eee;">
+                        <td style="padding:10px 6px;font-size:18px;width:30px;">${icons[c.status] || '❓'}</td>
+                        <td style="padding:10px 6px;">
+                            <strong>${escapeHtml(c.label)}</strong><br>
+                            <span style="color:#666;font-size:12.5px;">${escapeHtml(c.detail)}</span>
+                        </td>
+                        <td style="padding:10px 6px;text-align:right;">${fix}</td>
+                    </tr>`;
+                }
+                html += '</table>';
+                const summary = fails === 0 && warns === 0
+                    ? '<p style="color:#2E7D32;font-weight:600;">✅ Everything looks good!</p>'
+                    : `<p style="font-weight:600;">${fails ? '❌ ' + fails + ' problem(s) ' : ''}${warns ? '⚠️ ' + warns + ' warning(s)' : ''}</p>`;
+                box.innerHTML = summary + html;
+            } catch (e) {
+                box.innerHTML = '<p style="color:#C62828;">Doctor failed: ' + escapeHtml(e.message) + '</p>';
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
 
         // --- Status Logic ---
@@ -564,14 +639,86 @@
             if (trackLayer) { map.removeLayer(trackLayer); trackLayer = null; }
         }
 
+        // --- Locate me: browser geolocation (GPS + network via Android
+        // location services in the app WebView) with the service's GPS
+        // forwarder position as fallback. ---
+        let locateMarker = null;
+
+        function showMyLocation(lat, lon, accuracy) {
+            if (locateMarker) map.removeLayer(locateMarker);
+            locateMarker = L.circleMarker([lat, lon], {
+                radius: 8, color: '#1565C0', weight: 2,
+                fillColor: '#2196F3', fillOpacity: 0.8
+            }).addTo(map).bindPopup('📍 You are here' +
+                (accuracy ? ' (±' + Math.round(accuracy) + ' m)' : ''));
+            locateMarker.openPopup();
+            map.setView([lat, lon], Math.max(map.getZoom(), 13));
+        }
+
+        async function locateViaService() {
+            // The AIS service's own GPS forwarder (Settings → Location).
+            try {
+                const res = await fetch('/admin/api/status_ui');
+                const d = await res.json();
+                const m = String(d.gps_coordinates || '')
+                    .match(/(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)/);
+                if (m) {
+                    showMyLocation(parseFloat(m[1]), parseFloat(m[2]));
+                    return true;
+                }
+            } catch (e) { }
+            return false;
+        }
+
+        function locateMe(btn) {
+            if (btn) btn.style.opacity = '0.5';
+            const done = () => { if (btn) btn.style.opacity = ''; };
+            const fallback = async () => {
+                if (!(await locateViaService())) {
+                    alert('Could not determine your location. Allow location access for this app, or enable GPS forwarding under Settings → Location.');
+                }
+                done();
+            };
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    p => { showMyLocation(p.coords.latitude, p.coords.longitude, p.coords.accuracy); done(); },
+                    fallback,
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+            } else {
+                fallback();
+            }
+        }
+
         function initMap() {
             if (mapInitialized) return;
 
             map = L.map('leaflet_map', { zoomControl: true }).setView([51.505, -0.09], 10);
 
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; OpenStreetMap contributors', maxZoom: 19
             }).addTo(map);
+
+            // Non-technical users see a grey map when offline — tell them why.
+            let tileErrorShown = false;
+            tiles.on('tileerror', function () {
+                if (tileErrorShown) return;
+                tileErrorShown = true;
+                const note = document.createElement('div');
+                note.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1000;background:#B71C1C;color:#fff;padding:6px 14px;border-radius:4px;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,0.4);white-space:nowrap;';
+                note.textContent = '⚠️ No internet — map tiles cannot load';
+                document.getElementById('leaflet_map').appendChild(note);
+                setTimeout(() => { note.remove(); tileErrorShown = false; }, 8000);
+            });
+
+            // Locate-me button (top-left, under the zoom control).
+            const locateCtl = L.control({ position: 'topleft' });
+            locateCtl.onAdd = function () {
+                const div = L.DomUtil.create('div', 'leaflet-bar');
+                div.innerHTML = '<a href="#" title="Show my location" style="font-size:16px;line-height:30px;text-align:center;display:block;width:30px;height:30px;text-decoration:none;">📍</a>';
+                L.DomEvent.on(div, 'click', function (e) { L.DomEvent.stop(e); locateMe(div); });
+                return div;
+            };
+            locateCtl.addTo(map);
 
             L.control.scale({ imperial: true, metric: true }).addTo(map);
 
@@ -795,6 +942,11 @@
             // Stats Init
             if (id === 'stats') {
                 initStats();
+            }
+
+            // Doctor: run checks automatically when opened
+            if (id === 'doctor') {
+                runDoctor();
             }
 
             // Settings Init

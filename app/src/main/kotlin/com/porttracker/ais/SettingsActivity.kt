@@ -7,13 +7,16 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.webkit.GeolocationPermissions
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -26,12 +29,24 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.preference.PreferenceManager
 
 class SettingsActivity : AppCompatActivity() {
 
     private var webView: WebView? = null
     private var webContainer: LinearLayout? = null
+    private var portHeader: LinearLayout? = null
+
+    // Escape hatch: the port bar is hidden for normal users (the port is
+    // configurable in the web UI itself) and only appears when the local
+    // web server can't be reached — e.g. after a bad port change.
+    private var mainFrameFailures = 0
+    private var mainFrameErrored = false
+
+    // Geolocation prompt parked while the runtime permission dialog is up.
+    private var pendingGeoOrigin: String? = null
+    private var pendingGeoCallback: GeolocationPermissions.Callback? = null
 
     private val Int.dp: Int get() = (this * resources.displayMetrics.density).toInt()
 
@@ -76,6 +91,10 @@ class SettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
+
         // Build layout programmatically
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -88,7 +107,9 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(16.dp, 8.dp, 16.dp, 8.dp)
             gravity = android.view.Gravity.CENTER_VERTICAL
             setBackgroundColor(0xFFF5F5F5.toInt())
+            visibility = View.GONE
         }
+        portHeader = headerLayout
 
         // Port label
         val portLabel = TextView(this).apply {
@@ -210,6 +231,12 @@ class SettingsActivity : AppCompatActivity() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
         prefs.edit().putBoolean("webviewer_enabled", true).apply()
 
+        // Symmetric to webView.onPause() in onPause() — without this, any
+        // pause (even the battery-optimization dialog at first launch)
+        // freezes rendering permanently: JS keeps running but the WebView
+        // never paints another frame.
+        webView?.onResume()
+
         // Reload the WebView
         loadWebUI()
     }
@@ -250,7 +277,38 @@ class SettingsActivity : AppCompatActivity() {
         settings.domStorageEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+        settings.setGeolocationEnabled(true)
         webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
+                val uri = request?.url ?: return false
+                // The embedded settings UI stays in the WebView; everything
+                // else (Auth0 sign-in, TrustedDocks/PortTracker links, mailto)
+                // opens in a Custom Tab. OAuth providers like Google refuse to
+                // run inside a WebView (disallowed_useragent), so the sign-in
+                // MUST leave the WebView — a Custom Tab keeps it feeling
+                // in-app and returns the user here when done.
+                if (isLocalHttp(uri)) return false
+                openExternal(uri)
+                return true
+            }
+
+            override fun onPageStarted(
+                view: WebView?, url: String?, favicon: android.graphics.Bitmap?
+            ) {
+                mainFrameErrored = false
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                if (!mainFrameErrored) {
+                    // Local UI reachable again — retract the escape hatch.
+                    mainFrameFailures = 0
+                    portHeader?.visibility = View.GONE
+                }
+            }
+
             override fun onReceivedError(
                 view: WebView?,
                 request: WebResourceRequest?,
@@ -260,6 +318,10 @@ class SettingsActivity : AppCompatActivity() {
                 // A failed subresource — e.g. an external map tile when internet
                 // drops — must NOT trigger a full page reload, or the UI thrashes.
                 if (request?.isForMainFrame == true) {
+                    mainFrameErrored = true
+                    if (++mainFrameFailures >= PORT_HEADER_FAILURE_THRESHOLD) {
+                        portHeader?.visibility = View.VISIBLE
+                    }
                     view?.postDelayed({ loadWebUI() }, 2000)
                 }
             }
@@ -278,8 +340,61 @@ class SettingsActivity : AppCompatActivity() {
                 return true
             }
         }
-        webChromeClient = WebChromeClient()
+        webChromeClient = object : WebChromeClient() {
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String?,
+                callback: GeolocationPermissions.Callback?
+            ) {
+                // Only our own embedded UI may use the device location.
+                // External pages open in Custom Tabs, so any other origin
+                // here is unexpected — deny it.
+                if (origin == null || callback == null ||
+                    !(origin.startsWith("http://127.0.0.1") ||
+                      origin.startsWith("http://localhost"))) {
+                    callback?.invoke(origin, false, false)
+                    return
+                }
+                val fine = android.Manifest.permission.ACCESS_FINE_LOCATION
+                if (checkSelfPermission(fine) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    callback.invoke(origin, true, false)
+                } else {
+                    // Park the WebView prompt, ask Android first. Answered
+                    // in onRequestPermissionsResult.
+                    pendingGeoOrigin = origin
+                    pendingGeoCallback = callback
+                    requestPermissions(
+                        arrayOf(fine,
+                            android.Manifest.permission.ACCESS_COARSE_LOCATION),
+                        GEO_PERMISSION_REQUEST)
+                }
+            }
+        }
         addJavascriptInterface(WebBridge(), "Android")
+    }
+
+    /** True for http(s) URLs served by the app's own local web server. */
+    private fun isLocalHttp(uri: Uri): Boolean {
+        if (uri.scheme != "http" && uri.scheme != "https") return false
+        return uri.host in setOf("127.0.0.1", "localhost", "[::1]", "::1")
+    }
+
+    /** Open a URL outside the WebView: Custom Tab first (in-app feel, and
+     *  Google-OAuth-approved), plain browser intent as fallback. */
+    private fun openExternal(uri: Uri) {
+        try {
+            CustomTabsIntent.Builder()
+                .setShowTitle(true)
+                .build()
+                .launchUrl(this, uri)
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, uri))
+            } catch (e2: Exception) {
+                Log.w(TAG, "No browser available for $uri", e2)
+                Toast.makeText(this, "No browser app available", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** Replace a dead WebView with a fresh one in the same layout slot. */
@@ -296,13 +411,79 @@ class SettingsActivity : AppCompatActivity() {
         loadWebUI()
     }
 
-    /** JavaScript bridge exposed to the WebView as `Android.requestUsbPermission()` */
+    /** JavaScript bridge exposed to the WebView as `Android.*` */
     inner class WebBridge {
         @android.webkit.JavascriptInterface
         fun requestUsbPermission() {
             runOnUiThread {
                 checkAndRequestUsbPermission()
             }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun requestLocationPermission() {
+            runOnUiThread {
+                requestPermissions(
+                    arrayOf(
+                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                        android.Manifest.permission.ACCESS_COARSE_LOCATION),
+                    GEO_PERMISSION_REQUEST)
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openBatterySettings() {
+            runOnUiThread { requestBatteryOptimizationExemption() }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openWifiSettings() {
+            startSystemActivity(android.provider.Settings.ACTION_WIFI_SETTINGS)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openLocationSettings() {
+            startSystemActivity(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openAppSettings() {
+            runOnUiThread {
+                try {
+                    startActivity(Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.parse("package:$packageName")))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not open app settings", e)
+                }
+            }
+        }
+    }
+
+    private fun startSystemActivity(action: String) {
+        runOnUiThread {
+            try {
+                startActivity(Intent(action))
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not open $action", e)
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == GEO_PERMISSION_REQUEST) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults.any {
+                    it == android.content.pm.PackageManager.PERMISSION_GRANTED
+                }
+            pendingGeoCallback?.invoke(pendingGeoOrigin, granted, false)
+            pendingGeoCallback = null
+            pendingGeoOrigin = null
         }
     }
 
@@ -383,6 +564,8 @@ class SettingsActivity : AppCompatActivity() {
         const val TAG = "SettingsActivity"
         const val AUTO_START_DELAY = 1000L
         const val BOOT_CHECK_DELAY = 3000L
+        const val PORT_HEADER_FAILURE_THRESHOLD = 3
+        const val GEO_PERMISSION_REQUEST = 4711
         const val USB_PERMISSION_ACTION = "com.porttracker.ais.USB_PERMISSION"
     }
 }

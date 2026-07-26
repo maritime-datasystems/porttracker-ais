@@ -35,8 +35,13 @@ class AisReceiverService : Service() {
         // Hot path — runs for every decoded sentence; no logging here.
         @JvmStatic fun onNMEA(nmea: String) {
             incrementMessageCount()
+            lastNmeaTime = System.currentTimeMillis()
             nmeaListeners.forEach { it.onNMEA(nmea) }
         }
+
+        /** Wall-clock time of the last decoded sentence (0 = none yet). */
+        @Volatile var lastNmeaTime = 0L
+            private set
         
         @JvmStatic fun onStatus(status: String) {
             Log.i(TAG, "Status: $status")
@@ -85,6 +90,7 @@ class AisReceiverService : Service() {
     private var fileDescriptor: Int = -1
     private var currentSource: Int = 0
     private var gpsForwarder: GpsForwarder? = null
+    private var nmeaOutputServer: NmeaOutputServer? = null
     private var frpTunnelManager: FrpTunnelManager? = null
     private var adminWebServer: AdminWebServer? = null
     private var mqttPublisher: MqttPublisher? = null
@@ -225,6 +231,9 @@ class AisReceiverService : Service() {
                 Log.w(TAG, "GPS forwarding failed to start (check permissions)")
             }
         }
+
+        // Chartplotter network output (NMEA 0183 / NMEA 2000 emulation)
+        restartNmeaOutput()
         
         // Manage FRP tunnel — use intent extras if present, otherwise config
         if (intent?.hasExtra("REMOTE_ENABLED") == true) {
@@ -702,6 +711,8 @@ class AisReceiverService : Service() {
         try {
             gpsForwarder?.stop()
             gpsForwarder = null
+            nmeaOutputServer?.stop()
+            nmeaOutputServer = null
             Log.i(TAG, "GPS forwarder stopped")
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping GPS forwarder", e)
@@ -948,7 +959,23 @@ class AisReceiverService : Service() {
             stopVesselCacheWriter()
         }
 
+        // Restart chartplotter NMEA output with new settings
+        restartNmeaOutput()
+
         Log.i(TAG, "Live config changes applied (FRP=${config.remoteAccessEnabled}, MQTT=${config.mqttEnabled}, DB=${config.internalDbEnabled})")
+    }
+
+    /** FRP tunnel state for the doctor. */
+    fun frpTunnelRunning(): Boolean = frpTunnelManager?.isRunning() ?: false
+
+    /** (Re)start the chartplotter NMEA network output from current prefs. */
+    private fun restartNmeaOutput() {
+        nmeaOutputServer?.stop()
+        nmeaOutputServer = null
+        val nmeaConfig = NmeaOutputServer.Config.fromPrefs(this)
+        if (nmeaConfig != null) {
+            nmeaOutputServer = NmeaOutputServer(this, nmeaConfig).also { it.start() }
+        }
     }
 
     /** Start the internal vessel DB writer (polls the engine's ship list). */

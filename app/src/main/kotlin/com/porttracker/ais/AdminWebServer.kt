@@ -234,6 +234,12 @@ class AdminWebServer(
                 """{"success":true}""")
         }
 
+        // --- Doctor: self-diagnostics for non-technical users ---
+        if (session.method == Method.GET && session.uri == "/admin/api/doctor") {
+            return newFixedLengthResponse(
+                Response.Status.OK, "application/json", runDoctor())
+        }
+
         // --- Health endpoint for remote dashboard monitoring ---
         if (session.method == Method.GET && session.uri == "/admin/api/health") {
             return handleHealth()
@@ -919,6 +925,165 @@ class AdminWebServer(
     }
 
     private var authRestartDone = false
+
+    /**
+     * GET /admin/api/doctor — run all self-checks and return them as a JSON
+     * array. Each check: {id, label, status: ok|warn|fail|off, detail, fix?}.
+     * `fix` names a JS-bridge action the web UI can offer inside the app.
+     */
+    private fun runDoctor(): String {
+        val ctx = service
+        val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx)
+        val checks = org.json.JSONArray()
+
+        fun add(id: String, label: String, status: String, detail: String, fix: String? = null) {
+            checks.put(JSONObject().apply {
+                put("id", id); put("label", label)
+                put("status", status); put("detail", detail)
+                if (fix != null) put("fix", fix)
+            })
+        }
+
+        // 1. Service
+        add("service", "AIS service",
+            if (AisReceiverService.isRunning) "ok" else "fail",
+            if (AisReceiverService.isRunning) "Running" else "Service is not running")
+
+        // 2. USB SDR
+        val usb = try { UsbDeviceScanner.scanForDevices(ctx) } catch (e: Exception) { null }
+        when {
+            usb == null -> add("usb", "USB SDR receiver", "fail", "USB scan failed")
+            usb.found && usb.isUsable ->
+                add("usb", "USB SDR receiver", "ok", usb.deviceName ?: "SDR connected")
+            usb.found ->
+                add("usb", "USB SDR receiver", "fail",
+                    "${usb.deviceName ?: "SDR"} found but no USB permission",
+                    "usb_permission")
+            else ->
+                add("usb", "USB SDR receiver", "fail",
+                    "No RTL-SDR dongle found — plug it in via the USB-OTG adapter")
+        }
+
+        // 3. Radio / AIS reception
+        val lastMsgAge = if (AisReceiverService.lastNmeaTime == 0L) -1
+            else (System.currentTimeMillis() - AisReceiverService.lastNmeaTime) / 1000
+        when {
+            !AisReceiverService.hasDevice ->
+                add("radio", "AIS reception", "warn",
+                    "Receiver engine idle (no SDR) — web-only mode")
+            lastMsgAge in 0..300 ->
+                add("radio", "AIS reception", "ok",
+                    "${AisReceiverService.messageCount} messages, last ${lastMsgAge}s ago")
+            lastMsgAge > 300 ->
+                add("radio", "AIS reception", "warn",
+                    "No AIS message for ${lastMsgAge / 60} min — check antenna/coverage")
+            else ->
+                add("radio", "AIS reception", "warn",
+                    "No AIS messages received yet — check antenna and VHF coverage")
+        }
+
+        // 4. Internet
+        val internetOk = try {
+            val c = java.net.URL("http://connectivitycheck.gstatic.com/generate_204")
+                .openConnection() as java.net.HttpURLConnection
+            c.connectTimeout = 3000; c.readTimeout = 3000
+            c.requestMethod = "GET"
+            val ok = c.responseCode == 204
+            c.disconnect()
+            ok
+        } catch (e: Exception) { false }
+        add("internet", "Internet connection",
+            if (internetOk) "ok" else "fail",
+            if (internetOk) "Online"
+            else "No internet — data sharing, sign-in and map tiles will not work",
+            if (internetOk) null else "wifi_settings")
+
+        // 5. Location permission
+        val hasLocation =
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                ctx, android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                ctx, android.Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        add("location_permission", "Location permission",
+            if (hasLocation) "ok" else "warn",
+            if (hasLocation) "Granted"
+            else "Not granted — needed for station position and own-ship GPS output",
+            if (hasLocation) null else "location_permission")
+
+        // 6. Location services
+        val lm = ctx.getSystemService(android.content.Context.LOCATION_SERVICE)
+            as? android.location.LocationManager
+        val locOn = try {
+            lm?.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) == true ||
+            lm?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
+        } catch (e: Exception) { false }
+        add("location_services", "Location services (GPS)",
+            if (locOn) "ok" else "warn",
+            if (locOn) "Enabled" else "Disabled in Android settings",
+            if (locOn) null else "location_settings")
+
+        // 7. Battery optimization
+        val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE)
+            as android.os.PowerManager
+        val exempt = pm.isIgnoringBatteryOptimizations(ctx.packageName)
+        add("battery", "Battery optimization",
+            if (exempt) "ok" else "fail",
+            if (exempt) "App is exempt — Android will not kill the station"
+            else "Not exempt — Android may kill the receiver in the background",
+            if (exempt) null else "battery_settings")
+
+        // 8. Notifications (needed for the foreground service notice, API 33+)
+        val notifOk = androidx.core.app.NotificationManagerCompat.from(ctx)
+            .areNotificationsEnabled()
+        add("notifications", "Notifications",
+            if (notifOk) "ok" else "warn",
+            if (notifOk) "Enabled"
+            else "Disabled — the service status notification is hidden",
+            if (notifOk) null else "app_settings")
+
+        // 9. MQTT / data sharing
+        val mqttEnabled = prefs.all["mqtt_enabled"] == true ||
+            prefs.all["mqtt_enabled"]?.toString() == "true"
+        when {
+            !mqttEnabled -> add("mqtt", "Cloud data sharing (MQTT)", "off",
+                "Not configured — sign in on the Account tab to share your AIS data")
+            MqttPublisher.isConnected -> add("mqtt", "Cloud data sharing (MQTT)", "ok",
+                "Connected, ${MqttPublisher.messagesSent} messages sent")
+            else -> add("mqtt", "Cloud data sharing (MQTT)", "fail",
+                "Enabled but not connected — check internet and credentials")
+        }
+
+        // 10. Chartplotter NMEA output
+        val nmeaOutEnabled = prefs.all["nmea_out_enabled"] == true ||
+            prefs.all["nmea_out_enabled"]?.toString() == "true"
+        when {
+            !nmeaOutEnabled -> add("nmea_out", "Chartplotter output", "off", "Disabled")
+            NmeaOutputServer.isActive && NmeaOutputServer.lastError == null ->
+                add("nmea_out", "Chartplotter output", "ok",
+                    "Active, ${NmeaOutputServer.tcpClients} app(s) connected, " +
+                        "${NmeaOutputServer.sentenceCount} sentences sent")
+            NmeaOutputServer.isActive ->
+                add("nmea_out", "Chartplotter output", "warn",
+                    NmeaOutputServer.lastError ?: "Active with warnings")
+            else -> add("nmea_out", "Chartplotter output", "fail",
+                "Enabled but not running — save settings to restart it")
+        }
+
+        // 11. Remote access tunnel
+        val remoteEnabled = prefs.all["pref_enable_remote"] == true ||
+            prefs.all["pref_enable_remote"]?.toString() == "true"
+        when {
+            !remoteEnabled -> add("remote", "Remote access tunnel", "off", "Disabled")
+            service.frpTunnelRunning() -> add("remote", "Remote access tunnel", "ok", "Tunnel up")
+            else -> add("remote", "Remote access tunnel", "fail",
+                "Enabled but tunnel is down — check internet")
+        }
+
+        return JSONObject().put("checks", checks)
+            .put("timestamp", System.currentTimeMillis()).toString()
+    }
 
     private fun authStatusJson(s: PorttrackerAuth.Status): String =
         JSONObject().apply {
