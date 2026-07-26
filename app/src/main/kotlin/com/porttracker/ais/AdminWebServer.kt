@@ -982,16 +982,29 @@ class AdminWebServer(
                     "No AIS messages received yet — check antenna and VHF coverage")
         }
 
-        // 4. Internet
-        val internetOk = try {
-            val c = java.net.URL("http://connectivitycheck.gstatic.com/generate_204")
-                .openConnection() as java.net.HttpURLConnection
-            c.connectTimeout = 3000; c.readTimeout = 3000
-            c.requestMethod = "GET"
-            val ok = c.responseCode == 204
-            c.disconnect()
-            ok
-        } catch (e: Exception) { false }
+        // 4. Internet — ask Android first (it already runs captive-portal
+        // validation on every network); fall back to an HTTPS probe. The
+        // probe MUST be https: our network security config only permits
+        // cleartext to localhost, so a plain-http probe always throws.
+        val internetOk = run {
+            val validated = try {
+                val cm = ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                    as android.net.ConnectivityManager
+                val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                caps != null &&
+                    caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            } catch (e: Exception) { false }
+            validated || try {
+                val c = java.net.URL("https://connectivitycheck.gstatic.com/generate_204")
+                    .openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 3000; c.readTimeout = 3000
+                c.requestMethod = "GET"
+                val ok = c.responseCode == 204
+                c.disconnect()
+                ok
+            } catch (e: Exception) { false }
+        }
         add("internet", "Internet connection",
             if (internetOk) "ok" else "fail",
             if (internetOk) "Online"

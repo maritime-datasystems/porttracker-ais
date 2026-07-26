@@ -1,8 +1,8 @@
 {
   "version_code": 24,
-  "version_name": "3.0-0726-1320",
+  "version_name": "3.0-0726-1324",
   "apk_url": "https://github.com/maritime-datasystems/porttracker-aiscatcher/releases/download/v24/porttracker-ais.apk",
-  "apk_size": 29518203,
+  "apk_size": 29518420,
   "release_notes": "In-app browser fixes (settings UI no longer blanks after the battery dialog, sign-in opens in an in-app Custom Tab, map locate button), chartplotter output (NMEA 0183 / NMEA 2000 over TCP/UDP for OpenCPN & co) and the new Station Doctor self-diagnostics.",
   "min_version_code": 18
 }
