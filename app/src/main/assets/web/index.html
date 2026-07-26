@@ -212,9 +212,13 @@
                         <td style="padding: 8px;">SDR Device</td>
                         <td id="st_device" style="padding: 8px;">...</td>
                     </tr>
-                    <tr>
+                    <tr style="border-bottom: 1px solid #eee;">
                         <td style="padding: 8px;">AIS Messages</td>
                         <td id="st_msg" style="padding: 8px;">...</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px;">Account</td>
+                        <td id="st_account" style="padding: 8px;">...</td>
                     </tr>
                 </table>
             </div>
@@ -485,6 +489,7 @@
                         ' <button onclick="requestUsbPermission()" style="margin-left:8px; padding:4px 12px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Grant Permission</button>';
                 }
                 getStatusEl('st_msg').innerText = data.msg_count;
+                if (getStatusEl('st_account')) getStatusEl('st_account').innerText = data.account_status || '';
 
                 getStatusEl('st_gps_status').innerText = data.gps_status;
                 getStatusEl('st_gps_loc').innerText = data.gps_coordinates;

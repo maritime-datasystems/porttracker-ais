@@ -206,9 +206,22 @@ object PorttrackerAuth {
     // Provisioning against /v1/sharing
     // ------------------------------------------------------------------
 
+    /** Best-effort email/name from the ID token payload for status display. */
+    private fun accountLabelFromToken(idToken: String): String? = try {
+        val payload = idToken.split(".")[1]
+        val json = JSONObject(String(android.util.Base64.decode(
+            payload, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)))
+        json.optString("email").ifBlank { json.optString("name") }.ifBlank { null }
+    } catch (e: Exception) { null }
+
     private fun provision(context: Context, idToken: String) {
         status = status.copy(state = State.PROVISIONING)
         try {
+            accountLabelFromToken(idToken)?.let {
+                androidx.preference.PreferenceManager
+                    .getDefaultSharedPreferences(context)
+                    .edit().putString("sharing_account_email", it).apply()
+            }
             val prefs = androidx.preference.PreferenceManager
                 .getDefaultSharedPreferences(context)
             val apiBase = (prefs.getString("pt_api_base", DEFAULT_API_BASE)
@@ -251,19 +264,29 @@ object PorttrackerAuth {
         val aisJsonTopic: String,
     )
 
+    /** The API serializes camelCase (pydantic to_camel); accept snake too. */
+    private fun JSONObject.str(vararg names: String): String {
+        for (n in names) optString(n).takeIf { it.isNotBlank() }?.let { return it }
+        throw Exception("Missing field ${names.first()} in API response")
+    }
+
     private fun parseStationInfo(info: JSONObject): StationAccess {
         val station = info.getJSONObject("station")
-        val access = info.getJSONObject("mosquitto_access")
+        val access = info.optJSONObject("mosquittoAccess")
+            ?: info.optJSONObject("mosquitto_access")
+            ?: throw Exception(
+                "Station has no MQTT credentials yet - retry sign-in, and " +
+                "check the station on porttracker.co if it persists")
         return StationAccess(
             stationId = station.getInt("id"),
             hostname = station.getString("hostname"),
-            protocol = access.getString("protocol"),
-            host = access.getString("host"),
+            protocol = access.str("protocol"),
+            host = access.str("host"),
             port = access.getInt("port"),
-            username = access.getString("username"),
-            password = access.getString("password"),
-            aisRawTopic = access.getString("ais_raw_topic"),
-            aisJsonTopic = access.getString("ais_json_topic"),
+            username = access.str("username"),
+            password = access.str("password"),
+            aisRawTopic = access.str("aisRawTopic", "ais_raw_topic"),
+            aisJsonTopic = access.str("aisJsonTopic", "ais_json_topic"),
         )
     }
 

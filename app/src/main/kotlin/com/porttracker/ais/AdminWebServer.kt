@@ -432,7 +432,31 @@ class AdminWebServer(
             put("gps_status", gpsStatus)
             put("gps_coordinates", gpsCoords)
             put("gps_msg_count", GpsForwarder.messagesLastMinute)
+            put("account_status", accountStatus(ctx))
         }.toString()
+    }
+
+    /** PortTracker/TrustedDocks sign-in state for the status page. */
+    private fun accountStatus(ctx: android.content.Context): String {
+        val all = androidx.preference.PreferenceManager
+            .getDefaultSharedPreferences(ctx).all
+        val stationId = (all["sharing_station_id"] as? Int)
+            ?: all["sharing_station_id"]?.toString()?.toIntOrNull() ?: 0
+        val email = all["sharing_account_email"]?.toString() ?: ""
+        val mqttEnabled = all["mqtt_enabled"] == true ||
+            all["mqtt_enabled"]?.toString() == "true"
+        val apiKey = all["mqtt_api_key"]?.toString() ?: ""
+        return when {
+            stationId > 0 -> {
+                val who = if (email.isNotBlank()) email else "PortTracker/TrustedDocks"
+                val link = if (MqttPublisher.isConnected) "🟢" else "⚪"
+                "$link Signed in as $who — station #$stationId"
+            }
+            mqttEnabled && apiKey.isNotBlank() ->
+                "🔑 Connected via TrustedDocks API key"
+            mqttEnabled -> "🔧 Manual MQTT configuration"
+            else -> "⚪ Not signed in — running standalone"
+        }
     }
 
     private fun serveStaticFile(file: File): Response {
