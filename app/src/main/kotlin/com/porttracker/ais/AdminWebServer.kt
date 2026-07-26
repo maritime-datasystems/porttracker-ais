@@ -387,13 +387,33 @@ class AdminWebServer(
             else -> "❌ No SDR device"
         }
         
-        // GPS
+        // GPS — the phone's own fix (independent of GPSD forwarding, which
+        // used to drive this display and made GPS look "Disabled" whenever
+        // forwarding was off). Forwarding state is appended as a detail.
+        PhoneStatusTracker.poke(ctx)
         val gpsEnabled = androidx.preference.PreferenceManager.getDefaultSharedPreferences(ctx).getBoolean("gpsd_enabled", false)
-        val gpsStatus = if (!gpsEnabled) "❌ Disabled" else if (GpsForwarder.isForwarding) "🟢 Forwarding" else "⏸️ Waiting"
-        
-        val gpsCoords = if (GpsForwarder.hasPosition) {
-             val base = String.format(java.util.Locale.US, "%.6f, %.6f", GpsForwarder.lastLatitude, GpsForwarder.lastLongitude)
-             if (GpsForwarder.hasHeading) "$base 🧭 ${String.format("%.0f", GpsForwarder.lastHeading)}°" else base
+        val phoneFix = PhoneStatusTracker.lastLocation
+        val fixAgeS = phoneFix?.let { (System.currentTimeMillis() - it.time) / 1000 }
+        val forwardingNote = when {
+            !gpsEnabled -> "forwarding off"
+            GpsForwarder.isForwarding -> "forwarding 🟢"
+            else -> "forwarding ⏸️ waiting"
+        }
+        val gpsStatus = when {
+            !PhoneStatusTracker.permissionGranted -> "❌ No location permission ($forwardingNote)"
+            !PhoneStatusTracker.providersEnabled -> "❌ Location off in Android ($forwardingNote)"
+            phoneFix != null && fixAgeS != null && fixAgeS <= 120 -> "🟢 Fix ($forwardingNote)"
+            phoneFix != null -> "🟡 Last fix ${fixAgeS?.let { if (it > 3600) "${it / 3600}h" else "${it / 60}min" }} ago ($forwardingNote)"
+            else -> "🔍 Searching... ($forwardingNote)"
+        }
+
+        val heading = PhoneStatusTracker.lastHeading
+            ?: (if (GpsForwarder.hasHeading) GpsForwarder.lastHeading else null)
+        val gpsCoords = if (phoneFix != null) {
+            val base = String.format(java.util.Locale.US, "%.6f, %.6f", phoneFix.latitude, phoneFix.longitude)
+            if (heading != null) "$base 🧭 ${String.format("%.0f", heading)}°" else base
+        } else if (GpsForwarder.hasPosition) {
+            String.format(java.util.Locale.US, "%.6f, %.6f", GpsForwarder.lastLatitude, GpsForwarder.lastLongitude)
         } else "📍 Acquiring..."
         
         // Version
