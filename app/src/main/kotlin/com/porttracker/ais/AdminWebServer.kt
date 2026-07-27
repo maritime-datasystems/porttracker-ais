@@ -433,7 +433,18 @@ class AdminWebServer(
             put("gps_coordinates", gpsCoords)
             put("gps_msg_count", GpsForwarder.messagesLastMinute)
             put("account_status", accountStatus(ctx))
+            // Lets the status page offer the station's page online; 0 when
+            // this station does not belong to an account.
+            put("station_id", sharingStationId(ctx))
         }.toString()
+    }
+
+    /** This station's id on the account, or 0 when it has none. */
+    private fun sharingStationId(ctx: android.content.Context): Int {
+        val all = androidx.preference.PreferenceManager
+            .getDefaultSharedPreferences(ctx).all
+        return (all["sharing_station_id"] as? Int)
+            ?: all["sharing_station_id"]?.toString()?.toIntOrNull() ?: 0
     }
 
     /** PortTracker/TrustedDocks sign-in state for the status page. */

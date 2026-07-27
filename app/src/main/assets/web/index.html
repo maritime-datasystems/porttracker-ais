@@ -325,6 +325,10 @@
                         <td style="padding: 8px;">Account</td>
                         <td id="st_account" style="padding: 8px;">...</td>
                     </tr>
+                    <tr id="st_account_links_row" style="border-bottom: 1px solid #eee; display: none;">
+                        <td style="padding: 8px;">Online</td>
+                        <td id="st_account_links" style="padding: 8px;"></td>
+                    </tr>
                 </table>
             </div>
 
@@ -597,6 +601,26 @@
                 }
                 getStatusEl('st_msg').innerText = data.msg_count;
                 if (getStatusEl('st_account')) getStatusEl('st_account').innerText = data.account_status || '';
+                // A signed-in station has a page of its own on the web, where
+                // its reception history and coverage live; the app only ever
+                // knows about itself.
+                const linksRow = getStatusEl('st_account_links_row');
+                const links = getStatusEl('st_account_links');
+                if (linksRow && links) {
+                    const stationId = parseInt(data.station_id || 0, 10);
+                    if (stationId > 0) {
+                        links.innerHTML =
+                            '<a href="https://www.trusteddocks.com/account/ais-stations/'
+                            + stationId + '" target="_blank" rel="noopener">Station performance</a>'
+                            + ' · <a href="https://www.porttracker.co/profile?tab=my-antennas-data"'
+                            + ' target="_blank" rel="noopener">My antennas</a>'
+                            + ' · <a href="https://www.porttracker.co/live"'
+                            + ' target="_blank" rel="noopener">Live map</a>';
+                        linksRow.style.display = '';
+                    } else {
+                        linksRow.style.display = 'none';
+                    }
+                }
 
                 getStatusEl('st_gps_status').innerText = data.gps_status;
                 getStatusEl('st_gps_loc').innerText = data.gps_coordinates;

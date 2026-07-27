@@ -608,6 +608,70 @@ var SettingsRenderer = {
         `;
     },
 
+    /**
+     * Where to go online once this station belongs to an account.
+     *
+     * The station keeps working on its own, but everything that needs more
+     * than one station - how far it reaches, what it heard, the fleet around
+     * it - lives on the web. Opening these from here saves people hunting for
+     * the right page; links leave the app in a Chrome Custom Tab (see
+     * SettingsActivity.shouldOverrideUrlLoading).
+     */
+    renderAccountLinks: function (stationId, accountEmail) {
+        const PT = 'https://www.porttracker.co';
+        const TD = 'https://www.trusteddocks.com';
+        const links = [
+            {
+                href: `${TD}/account/ais-stations/${stationId}`,
+                icon: 'bi-graph-up',
+                title: 'This station&apos;s performance',
+                detail: 'Reception per hour, vessels heard, how far it reaches',
+            },
+            {
+                href: `${PT}/profile?tab=my-antennas-data`,
+                icon: 'bi-broadcast-pin',
+                title: 'All your antennas',
+                detail: 'Every station on the account, and their status',
+            },
+            {
+                href: `${PT}/dashboard`,
+                icon: 'bi-speedometer2',
+                title: 'Dashboard',
+                detail: 'Ports, companies, watchlist and antennas at a glance',
+            },
+            {
+                href: `${PT}/live`,
+                icon: 'bi-map',
+                title: 'Live map',
+                detail: 'The traffic your station is helping to track',
+            },
+            {
+                href: `${PT}/profile?tab=watchlist`,
+                icon: 'bi-star',
+                title: 'Watchlist',
+                detail: 'Vessels you follow, and the reports they email you',
+            },
+        ];
+        const rows = links.map(link => `
+            <a class="list-group-item list-group-item-action d-flex align-items-start gap-3"
+               href="${link.href}" target="_blank" rel="noopener">
+                <i class="bi ${link.icon} mt-1"></i>
+                <span>
+                    <span class="fw-semibold">${link.title}</span><br>
+                    <span class="text-muted" style="font-size:0.85em">${link.detail}</span>
+                </span>
+                <i class="bi bi-box-arrow-up-right ms-auto mt-1 text-muted"></i>
+            </a>`).join('');
+        return `
+            <div class="card mb-3">
+                <div class="card-header d-flex align-items-center gap-2">
+                    <i class="bi bi-person-check"></i>
+                    <span>Signed in${accountEmail ? ` as ${accountEmail}` : ''} — station #${stationId}</span>
+                </div>
+                <div class="list-group list-group-flush">${rows}</div>
+            </div>`;
+    },
+
     renderPorttrackerPane: function () {
         const mqttEnabled = this.bool('mqtt_enabled');
         const brokerUrl = this.val('mqtt_broker_url', 'ssl://mqtt.navisense.de:8883');
@@ -618,9 +682,13 @@ var SettingsRenderer = {
         const mqttTopicJson = this.val('mqtt_topic_json', '');
         const mqttFormat = this.val('mqtt_format', 'aisc-json');
         const topicsAssigned = mqttTopicRaw || mqttTopicJson;
+        const stationId = parseInt(this.val('sharing_station_id', '0'), 10) || 0;
+        const accountEmail = this.val('sharing_account_email', '');
 
         return `
             <h5><i class="bi bi-cloud-arrow-up"></i> PortTracker / TrustedDocks Account</h5>
+
+            ${stationId > 0 ? this.renderAccountLinks(stationId, accountEmail) : ''}
 
             <!-- Sign in with the PortTracker / TrustedDocks account -->
             <div class="card mb-3 border-primary">
