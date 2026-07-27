@@ -788,7 +788,7 @@ class AisReceiverService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "TrustedDocks AIS",
+                "PortTracker AIS",
                 NotificationManager.IMPORTANCE_MIN  // Minimum importance - no sound, no popup
             ).apply {
                 description = "AIS Receiver service status"
@@ -818,7 +818,7 @@ class AisReceiverService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("TrustedDocks AIS")
+            .setContentTitle("PortTracker AIS")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
@@ -837,13 +837,13 @@ class AisReceiverService : Service() {
     private fun acquireWakeLock() {
         // CPU wake lock — keep CPU alive indefinitely
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "porttracker-aiscatcher:WakeLock")
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "porttracker-ais:WakeLock")
         wakeLock?.acquire() // No timeout — released explicitly in onDestroy
         
         // WiFi lock — prevent Android from turning off WiFi when screen is off
         // Without this, the phone becomes unreachable over the network
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "porttracker-aiscatcher:WifiLock")
+        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "porttracker-ais:WifiLock")
         wifiLock?.acquire()
         Log.i(TAG, "Wake lock and WiFi lock acquired")
     }

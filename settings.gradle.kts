@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "porttracker-aiscatcher"
+rootProject.name = "porttracker-ais"
 include(":app")

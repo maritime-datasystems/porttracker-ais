@@ -2,7 +2,7 @@
 #
 # Re-vendor the native AIS-catcher C++ sources into this repo.
 #
-# porttracker-aiscatcher is self-contained: the native sources
+# porttracker-ais is self-contained: the native sources
 # (AIS-catcher, libusb, rtl-sdr, airspy) live under app/src/main/jni/ and are
 # committed, so the project builds without any sibling checkout. This script
 # refreshes that vendored copy from an upstream AIS-catcher-for-Android tree

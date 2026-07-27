@@ -9,14 +9,14 @@
 
         <EditTextPreference
             android:key="pref_porttracker_username"
-            android:title="TrustedDocks Username"
-            android:summary="Enter your TrustedDocks username"
+            android:title="PortTracker Username"
+            android:summary="Enter your PortTracker username"
             android:defaultValue=""
             app:iconSpaceReserved="false" />
 
         <EditTextPreference
             android:key="pref_station_name"
-            android:title="TrustedDocks AIS Station Name"
+            android:title="Station Name"
             android:summary="Enter a name for your station"
             android:defaultValue=""
             app:iconSpaceReserved="false" />

@@ -28,7 +28,9 @@ import java.net.URL
  *   }
  *
  * The manifest URL is configurable via SharedPreferences key "update_manifest_url".
- * Default: GitHub raw file in the porttracker-aiscatcher repo.
+ * Default: GitHub raw file in the porttracker-ais repo. GitHub keeps
+ * serving the old porttracker-aiscatcher URLs after the rename, so
+ * stations installed before it still find their manifest.
  *
  * Flow:
  *  1. checkForUpdate() → fetches manifest JSON, compares versionCode
@@ -44,7 +46,7 @@ class UpdateManager(private val context: Context) {
         // Default manifest URL — raw JSON file in the GitHub repo
         // Can be overridden via SharedPreferences "update_manifest_url"
         const val DEFAULT_MANIFEST_URL =
-            "https://raw.githubusercontent.com/maritime-datasystems/porttracker-aiscatcher/main/update-manifest.json"
+            "https://raw.githubusercontent.com/maritime-datasystems/porttracker-ais/main/update-manifest.json"
 
         fun getCurrentVersionCode(context: Context): Int {
             return try {

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">TrustedDocks AIS</string>
+    <string name="app_name">PortTracker AIS</string>
     
     <string-array name="device_types">
         <item>RTL-TCP (Network)</item>

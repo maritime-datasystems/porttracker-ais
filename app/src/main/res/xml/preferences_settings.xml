@@ -275,7 +275,7 @@
         <Preference
             android:key="usb_permission_tip"
             android:title="🔌 USB Permission"
-            android:summary="Grant permission and check 'Always open TrustedDocks AIS' for remote operation"
+            android:summary="Grant permission and check 'Always open PortTracker AIS' for remote operation"
             android:selectable="false"
             app:iconSpaceReserved="false" />
 

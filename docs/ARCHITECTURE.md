@@ -1,4 +1,4 @@
-# PortTracker AIS-catcher — Architecture
+# PortTracker AIS — Architecture
 
 A headless Android AIS receiver for unattended port stations: a phone + RTL-SDR
 dongle decodes AIS traffic and forwards it to PortTracker/TrustedDocks (MQTT),

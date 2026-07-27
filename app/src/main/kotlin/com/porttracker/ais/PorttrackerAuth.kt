@@ -350,7 +350,7 @@ object PorttrackerAuth {
             put("hostname", hostname)
             put("antenna_uuid", antennaUuid)
             put("description",
-                "PortTracker AIS-catcher on ${android.os.Build.MODEL}")
+                "PortTracker AIS on ${android.os.Build.MODEL}")
             put("position", JSONObject().apply {
                 put("lat", position.first)
                 put("lon", position.second)
@@ -396,7 +396,7 @@ object PorttrackerAuth {
                 .replace(Regex("[^a-z0-9-]+"), "-").trim('-')
             "$slug-${androidId.takeLast(4)}"
         } else {
-            "aiscatcher-$androidId"
+            "porttracker-ais-$androidId"
         }
         prefs.edit().putString("sharing_station_hostname", hostname).apply()
         return hostname

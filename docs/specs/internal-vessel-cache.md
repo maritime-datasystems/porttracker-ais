@@ -1,6 +1,6 @@
 # Spec: Internal Vessel Static Cache (persistent SQLite)
 
-Status: draft · Owner: TBD · Target: porttracker-aiscatcher
+Status: draft · Owner: TBD · Target: porttracker-ais
 
 ## 1. Goal
 
