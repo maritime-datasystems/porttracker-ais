@@ -884,6 +884,17 @@ class AisReceiverService : Service() {
                 }
                 val antennaUuid = prefs.getString(
                     PorttrackerAuth.PREF_ANTENNA_UUID, "") ?: ""
+                // String-tolerant: the web config page stores booleans as
+                // strings on save.
+                val gpsEnabled = prefs.all["mqtt_gps_enabled"] == true ||
+                    prefs.all["mqtt_gps_enabled"]?.toString() == "true"
+                val displayName =
+                    prefs.getString("station_display_name", "") ?: ""
+                val stationKind =
+                    (prefs.getString("station_kind", "fixed") ?: "fixed")
+                        .ifBlank { "fixed" }
+                val publicStation = prefs.all["station_public"] == true ||
+                    prefs.all["station_public"]?.toString() == "true"
 
                 // Auto-construct topics from userId/antennaId if not explicitly set.
                 // This handles devices provisioned before auto-topic construction was added.
@@ -922,7 +933,11 @@ class AisReceiverService : Service() {
                         stationName = stationName,
                         topicStatus = topicStatus,
                         stationId = stationId,
-                        antennaUuid = antennaUuid
+                        antennaUuid = antennaUuid,
+                        gpsEnabled = gpsEnabled,
+                        displayName = displayName,
+                        stationKind = stationKind,
+                        publicStation = publicStation
                     )
                 )
 

@@ -68,6 +68,15 @@ class MqttPublisher(private val context: Context) {
         val topicStatus: String = "",
         val stationId: Int = 0,
         val antennaUuid: String = "",
+        // Report where this station stands. Its coverage - how far it hears
+        // and in which direction - can only be worked out from a position, so
+        // a station left at 0/0 gets no reach figures at all.
+        val gpsEnabled: Boolean = false,
+        // How the station presents itself: the real name of whatever carries
+        // the antenna, what that is, and whether other users may see it.
+        val displayName: String = "",
+        val stationKind: String = "fixed",
+        val publicStation: Boolean = false,
     ) {
         /** Paho uses ssl:// not mqtts:// */
         val normalizedBrokerUrl: String
@@ -246,6 +255,50 @@ class MqttPublisher(private val context: Context) {
      * what the station knows about itself, which is what the detail page shows
      * when reception drops to nothing.
      */
+    /**
+     * Add the station's own position, when the operator asked us to send it.
+     *
+     * Prefers a fix the phone already has - a last known location costs
+     * nothing - and only asks the tracker to start when there is none, so an
+     * unattended station does not hold the GPS on for a coordinate that
+     * changes once a year. The age is reported alongside so the backend can
+     * judge how much to trust it.
+     */
+    private fun appendPosition(payload: org.json.JSONObject) {
+        val location = PhoneStatusTracker.lastLocation ?: lastKnownLocation()
+        if (location == null) {
+            // Nothing yet: wake the tracker so the next status has a fix.
+            PhoneStatusTracker.poke(context)
+            return
+        }
+        payload.put("lat", location.latitude)
+        payload.put("lon", location.longitude)
+        if (location.hasAccuracy()) {
+            payload.put("position_accuracy_m", location.accuracy.toDouble())
+        }
+        val ageMs = System.currentTimeMillis() - location.time
+        if (location.time > 0) payload.put("position_age_s", ageMs / 1000)
+    }
+
+    private fun lastKnownLocation(): android.location.Location? {
+        return try {
+            val manager = context.getSystemService(Context.LOCATION_SERVICE)
+                as android.location.LocationManager
+            listOf("gps", "network", "passive")
+                .mapNotNull {
+                    try {
+                        manager.getLastKnownLocation(it)
+                    } catch (_: SecurityException) {
+                        null
+                    }
+                }
+                .maxByOrNull { it.time }
+        } catch (e: Exception) {
+            Log.w(TAG, "No last known location: ${e.message}")
+            null
+        }
+    }
+
     private fun publishStatus(online: Boolean) {
         val cfg = config ?: return
         if (cfg.topicStatus.isBlank()) return
@@ -282,6 +335,12 @@ class MqttPublisher(private val context: Context) {
             // Version is nice to have, presence is not worth failing over.
         }
         if (!online) return payload.toString()
+        if (cfg.displayName.isNotBlank()) {
+            payload.put("display_name", cfg.displayName)
+        }
+        payload.put("station_kind", cfg.stationKind)
+        payload.put("public", cfg.publicStation)
+        if (cfg.gpsEnabled) appendPosition(payload)
         payload.put("messages_sent", messagesSent)
         payload.put("messages_decoded", AisReceiverService.messageCount)
         payload.put("service_running", AisReceiverService.isRunning)

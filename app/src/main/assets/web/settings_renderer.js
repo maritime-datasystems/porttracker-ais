@@ -680,6 +680,10 @@ var SettingsRenderer = {
 
     renderPorttrackerPane: function () {
         const mqttEnabled = this.bool('mqtt_enabled');
+        const mqttGpsEnabled = this.bool('mqtt_gps_enabled');
+        const displayName = this.val('station_display_name', '');
+        const stationKind = this.val('station_kind', 'fixed');
+        const stationPublic = this.bool('station_public');
         const brokerUrl = this.val('mqtt_broker_url', 'ssl://mqtt.navisense.de:8883');
         const mqttUsername = this.val('mqtt_username', '');
         const mqttPassword = this.val('mqtt_password', '');
@@ -817,6 +821,64 @@ var SettingsRenderer = {
                 <input class="form-check-input" type="checkbox" id="mqtt_enabled" ${mqttEnabled ? 'checked' : ''}>
                 <label class="form-check-label" for="mqtt_enabled"><strong>Enable MQTT Publishing</strong></label>
             </div>
+
+            <div class="card mb-3">
+                <div class="card-header"><i class="bi bi-signpost-2"></i> How this station appears</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Display name</label>
+                        <input type="text" class="form-control" id="station_display_name"
+                            value="${displayName}" maxlength="80"
+                            placeholder="e.g. MS Hamburg, Service Van 3, Pier 4 roof">
+                        <div class="form-text">
+                            The real name of whatever carries this antenna. Used
+                            wherever the station is shown instead of its technical
+                            hostname.
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Mounted on</label>
+                        <select class="form-select" id="station_kind">
+                            <option value="fixed" ${stationKind === 'fixed' ? 'selected' : ''}>A fixed position (mast, roof, pier)</option>
+                            <option value="vessel" ${stationKind === 'vessel' ? 'selected' : ''}>A vessel or floating platform</option>
+                            <option value="vehicle" ${stationKind === 'vehicle' ? 'selected' : ''}>A vehicle</option>
+                            <option value="person" ${stationKind === 'person' ? 'selected' : ''}>A person on the move</option>
+                        </select>
+                        <div class="form-text">
+                            Anything but a fixed position is treated as moving: its
+                            position is followed rather than set once, and coverage
+                            figures are not measured against a single spot.
+                        </div>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="station_public"
+                            ${stationPublic ? 'checked' : ''}>
+                        <label class="form-check-label" for="station_public">
+                            <strong>Show this station publicly on porttracker.co</strong>
+                        </label>
+                        <div class="form-text">
+                            Off by default. When on, the display name, the type and
+                            the position above are visible to other PortTracker users
+                            — a moving station appears on the map. Turn it off and the
+                            station is yours alone again.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-3 form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="mqtt_gps_enabled" ${mqttGpsEnabled ? 'checked' : ''}>
+                <label class="form-check-label" for="mqtt_gps_enabled"><strong>Send this station's position</strong></label>
+                <div class="form-text">
+                    Reports the device's own GPS position with the station status,
+                    so the antenna sits in the right place on the map and its
+                    coverage can be measured — how far it hears, and in which
+                    direction, is worked out from where it stands. Nothing about
+                    the position is published to other users beyond what your
+                    station page already shows. Leave it off for a station whose
+                    location you would rather set by hand on the website.
+                </div>
+            </div>
             
             <button class="btn btn-outline-secondary btn-sm" onclick="SettingsRenderer.refreshGatewayStatus()">
                 <i class="bi bi-arrow-clockwise"></i> Refresh Status
@@ -951,6 +1013,10 @@ var SettingsRenderer = {
 
         // Collect TrustedDocks / MQTT settings
         collect('mqtt_enabled', 'bool');
+        collect('mqtt_gps_enabled', 'bool');
+        collect('station_display_name');
+        collect('station_kind');
+        collect('station_public', 'bool');
         collect('mqtt_broker_url');
         collect('mqtt_username');
         collect('mqtt_password');
