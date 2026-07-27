@@ -1,8 +1,8 @@
 {
-  "version_code": 26,
-  "version_name": "3.0-0727-1313",
-  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v26/porttracker-ais.apk",
-  "apk_size": 29527784,
-  "release_notes": "A signed-in station now links straight to its pages on the web: its own performance, all antennas on the account, the dashboard, the live map and your watchlist.",
+  "version_code": 27,
+  "version_name": "3.0-0727-1343",
+  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v27/porttracker-ais.apk",
+  "apk_size": 29527807,
+  "release_notes": "A signed-in station's performance link now opens PortTracker's own antenna page: reception per hour, vessels heard and coverage by direction. The TrustedDocks page stays available alongside it.",
   "min_version_code": 18
 }
