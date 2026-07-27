@@ -450,7 +450,12 @@ class AdminWebServer(
             stationId > 0 -> {
                 val who = if (email.isNotBlank()) email else "PortTracker/TrustedDocks"
                 val link = if (MqttPublisher.isConnected) "🟢" else "⚪"
-                "$link Signed in as $who — station #$stationId"
+                // The antenna id is what identifies this station on the
+                // website, so show it here rather than making people guess
+                // which of their antennas #<n> is.
+                val uuid = all["sharing_station_uuid"]?.toString() ?: ""
+                val antenna = if (uuid.isNotBlank()) " · antenna $uuid" else ""
+                "$link Signed in as $who — station #$stationId$antenna"
             }
             mqttEnabled && apiKey.isNotBlank() ->
                 "🔑 Connected via TrustedDocks API key"
