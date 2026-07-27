@@ -622,10 +622,16 @@ var SettingsRenderer = {
         const TD = 'https://www.trusteddocks.com';
         const links = [
             {
-                href: `${TD}/account/ais-stations/${stationId}`,
+                href: `${PT}/antenna/${stationId}`,
                 icon: 'bi-graph-up',
                 title: 'This station&apos;s performance',
                 detail: 'Reception per hour, vessels heard, how far it reaches',
+            },
+            {
+                href: `${TD}/account/ais-stations/${stationId}`,
+                icon: 'bi-clipboard-data',
+                title: 'The same on TrustedDocks',
+                detail: 'One login covers both - use whichever you work in',
             },
             {
                 href: `${PT}/profile?tab=my-antennas-data`,
