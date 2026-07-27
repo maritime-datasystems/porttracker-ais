@@ -1,6 +1,6 @@
 # Spec: Vessel position history with tiered retention
 
-Status: draft · Target: porttracker-aiscatcher
+Status: draft · Target: porttracker-ais
 
 ## 1. Goal
 

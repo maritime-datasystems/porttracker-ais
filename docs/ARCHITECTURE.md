@@ -1,4 +1,4 @@
-# PortTracker AIS-catcher — Architecture
+# PortTracker AIS — Architecture
 
 A headless Android AIS receiver for unattended port stations: a phone + RTL-SDR
 dongle decodes AIS traffic and forwards it to PortTracker/TrustedDocks (MQTT),
@@ -194,6 +194,25 @@ Start paths: launcher Activity (auto web-only + SDR if present) · boot
   writer only — native engine settings (device type, UDP/TCP outputs, web
   port) need an engine or app restart.
 
+## 8b. Station identity
+
+A station has three identifiers, and they are not interchangeable:
+
+| Identifier | Owner | Changes when | Used for |
+|---|---|---|---|
+| `antenna_uuid` | this device (`PorttrackerAuth.antennaUuid`, a UUID generated on first use) | app data is wiped | recognising this antenna across sign-ins, renames and re-registrations |
+| station id (`sharing_station_id`, e.g. `#146`) | porttracker database | never | MQTT topics (`ais/{format}/SHARE/{id}/1000005`), the gateway's `antennaID` |
+| hostname (`sharing_station_hostname`) | this device, editable on the website | user renames the station | a human-readable label |
+
+Sign-in (`PorttrackerAuth.provision`) lists the account's stations, matches on
+the antenna uuid first and the hostname second, and registers only when neither
+matches. Registration is idempotent server-side, so a device that re-registers
+gets its existing station back instead of a duplicate; a uuid already claimed
+by another account is refused with 409. Stations created before this device had
+a uuid are matched by hostname once and adopt the uuid from then on.
+
+One account may run any number of antennas — the uuid is what keeps them apart.
+
 ## 9. Configuration keys (SharedPreferences)
 
 | Area | Keys |
@@ -205,6 +224,7 @@ Start paths: launcher Activity (auto web-only + SDR if present) · boot
 | GPS | `gpsd_enabled`, `gpsd_host`, `gpsd_port`, `gpsd_interval` |
 | Hub | `hub_sharing`, `hub_key` (aiscatcher.org community sharing) |
 | Remote | `pref_enable_remote`, `pref_station_name`, `frp_auth_token` |
+| Station identity | `antenna_uuid` (generated once on this device, never changes), `sharing_station_id`, `sharing_station_hostname`, `sharing_station_uuid`, `sharing_account_email` |
 | MQTT | `mqtt_enabled`, `mqtt_broker_url`, `mqtt_username`, `mqtt_password`, `mqtt_topic_raw`, `mqtt_topic_json`, `mqtt_format` (`aisc-json`\|`raw`), `mqtt_api_key`, `mqtt_user_id`, `mqtt_antenna_id`, `mqtt_port_id`, `mqtt_station_name`, `mqtt_user_name`, `mqtt_company_name` |
 | Vessel DB | `internal_db_enabled`, `position_logging_enabled`, `last_position_maintenance_ms` |
 | Auto-start | `auto_start_boot`, `auto_start_usb`, `auto_start_launch` |

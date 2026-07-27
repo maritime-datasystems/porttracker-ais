@@ -1,4 +1,4 @@
-# AIS PortTracker
+# PortTracker AIS
 
 A minimal headless AIS receiver service for Android. This app runs as a background service, receiving AIS messages from SDR devices and forwarding them to configured outputs.
 

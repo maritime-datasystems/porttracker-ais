@@ -42,6 +42,9 @@ object PorttrackerAuth {
     const val DEFAULT_AUTH0_CLIENT_ID = "wOdIJ2QHiFlb7m0Dhm6Fxb2Tt46DeeLf"
     const val DEFAULT_API_BASE = "https://api-gateway.porttracker.co/api"
 
+    /** Survives sign-out: the antenna is the device, not the account. */
+    const val PREF_ANTENNA_UUID = "antenna_uuid"
+
     enum class State { IDLE, PENDING, PROVISIONING, PROVISIONED, ERROR }
 
     data class Status(
@@ -227,12 +230,22 @@ object PorttrackerAuth {
             val apiBase = (prefs.getString("pt_api_base", DEFAULT_API_BASE)
                 ?: DEFAULT_API_BASE).trimEnd('/')
             val hostname = stationHostname(context)
+            val antennaUuid = antennaUuid(context)
 
-            // One account may run several stations - only reuse the station
-            // whose hostname matches THIS device; never touch the others.
-            var station = findOwnStation(apiBase, idToken, hostname)
-            if (station == null) {
-                station = createStation(apiBase, idToken, hostname, context)
+            // One account may run several stations - only ever touch the one
+            // belonging to THIS device, identified by its antenna uuid (the
+            // hostname is a fallback for stations registered before the uuid
+            // existed, and for the server it is only a label).
+            var station = findOwnStation(apiBase, idToken, antennaUuid, hostname)
+            if (station == null || station.antennaUuid != antennaUuid) {
+                // Registers the station, or hands our uuid to a station that
+                // was matched by hostname alone (created before this device
+                // had a uuid). Registering is idempotent server-side: it
+                // matches on the uuid, falls back to the hostname, and returns
+                // the existing station either way. That requires an API that
+                // knows antennaUuid - deploy the API before shipping the app.
+                station = createStation(
+                    apiBase, idToken, hostname, antennaUuid, context)
             }
 
             persistMosquittoAccess(context, station)
@@ -255,6 +268,7 @@ object PorttrackerAuth {
     private data class StationAccess(
         val stationId: Int,
         val hostname: String,
+        val antennaUuid: String?,
         val protocol: String,
         val host: String,
         val port: Int,
@@ -280,6 +294,9 @@ object PorttrackerAuth {
         return StationAccess(
             stationId = station.getInt("id"),
             hostname = station.getString("hostname"),
+            antennaUuid = station.optString("antennaUuid")
+                .ifBlank { station.optString("antenna_uuid") }
+                .ifBlank { null },
             protocol = access.str("protocol"),
             host = access.str("host"),
             port = access.getInt("port"),
@@ -291,7 +308,8 @@ object PorttrackerAuth {
     }
 
     private fun findOwnStation(
-        apiBase: String, idToken: String, hostname: String,
+        apiBase: String, idToken: String, antennaUuid: String,
+        hostname: String,
     ): StationAccess? {
         val connection = openJson("$apiBase/v1/sharing/stations", "GET")
         connection.setRequestProperty("Authorization", "Bearer $idToken")
@@ -300,23 +318,39 @@ object PorttrackerAuth {
                 "Station list failed (HTTP ${connection.responseCode})")
         }
         val stations = JSONArray(readAll(connection.inputStream))
+        var byHostname = -1
         for (i in 0 until stations.length()) {
-            val info = stations.getJSONObject(i)
-            if (info.getJSONObject("station").optString("hostname") == hostname) {
-                return parseStationInfo(info)
+            val station = stations.getJSONObject(i).getJSONObject("station")
+            if (stationUuid(station) == antennaUuid) {
+                return parseStationInfo(stations.getJSONObject(i))
+            }
+            // Remember, but keep looking: a uuid match always wins, and the
+            // user may have given two devices the same station name. Only the
+            // match is parsed in full, because parsing insists on credentials
+            // that the user's OTHER stations may not have.
+            if (byHostname < 0 && station.optString("hostname") == hostname) {
+                byHostname = i
             }
         }
-        return null
+        return if (byHostname < 0) null
+        else parseStationInfo(stations.getJSONObject(byHostname))
     }
 
+    private fun stationUuid(station: JSONObject): String? =
+        station.optString("antennaUuid")
+            .ifBlank { station.optString("antenna_uuid") }
+            .ifBlank { null }
+
     private fun createStation(
-        apiBase: String, idToken: String, hostname: String, context: Context,
+        apiBase: String, idToken: String, hostname: String,
+        antennaUuid: String, context: Context,
     ): StationAccess {
         val position = lastKnownPosition(context)
         val body = JSONObject().apply {
             put("hostname", hostname)
+            put("antenna_uuid", antennaUuid)
             put("description",
-                "PortTracker AIS-catcher on ${android.os.Build.MODEL}")
+                "PortTracker AIS on ${android.os.Build.MODEL}")
             put("position", JSONObject().apply {
                 put("lat", position.first)
                 put("lon", position.second)
@@ -362,10 +396,35 @@ object PorttrackerAuth {
                 .replace(Regex("[^a-z0-9-]+"), "-").trim('-')
             "$slug-${androidId.takeLast(4)}"
         } else {
-            "aiscatcher-$androidId"
+            "porttracker-ais-$androidId"
         }
         prefs.edit().putString("sharing_station_hostname", hostname).apply()
         return hostname
+    }
+
+    /**
+     * This antenna's permanent identifier, generated on the device.
+     *
+     * Everything else about a station is renameable or reassignable: the
+     * hostname is a label, the station number is a database key, ANDROID_ID
+     * changes when the app is signed with a different key (which a Play Store
+     * build would be). A uuid generated once and kept in the app's own
+     * preferences is what lets the backend recognise this antenna again -
+     * across renames, reinstalls with restored data, and re-registrations -
+     * instead of piling up duplicate stations.
+     *
+     * Wiping app data means a new uuid, so a new station; the old one stays on
+     * the account and can be deleted there.
+     */
+    fun antennaUuid(context: Context): String {
+        val prefs = androidx.preference.PreferenceManager
+            .getDefaultSharedPreferences(context)
+        prefs.getString(PREF_ANTENNA_UUID, "")!!.ifBlank { null }
+            ?.let { return it }
+        val uuid = java.util.UUID.randomUUID().toString()
+        prefs.edit().putString(PREF_ANTENNA_UUID, uuid).apply()
+        InternalLog.log("Auth: generated antenna uuid $uuid")
+        return uuid
     }
 
     private fun lastKnownPosition(context: Context): Pair<Double, Double> {
@@ -410,6 +469,10 @@ object PorttrackerAuth {
             .putInt("mqtt_antenna_id", s.stationId)
             .putString("sharing_station_hostname", s.hostname)
             .putInt("sharing_station_id", s.stationId)
+            // What the website shows as the antenna id, so the two can be
+            // matched by eye. Normally identical to PREF_ANTENNA_UUID; it
+            // differs for stations the server named before this device did.
+            .putString("sharing_station_uuid", s.antennaUuid ?: "")
             .apply()
         // Deliberately NOT touching pref_station_name: that's the user's
         // display name for this device and may be shared wording across
