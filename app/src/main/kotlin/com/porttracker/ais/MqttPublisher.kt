@@ -344,6 +344,18 @@ class MqttPublisher(private val context: Context) {
         payload.put("messages_sent", messagesSent)
         payload.put("messages_decoded", AisReceiverService.messageCount)
         payload.put("service_running", AisReceiverService.isRunning)
+        // Whether a receiver is even plugged in. Without this, a station with
+        // no dongle and one with a broken antenna look identical from the
+        // outside - both simply decode nothing.
+        try {
+            val device = UsbDeviceScanner.scanForDevices(context)
+            payload.put("sdr_attached", device.found)
+            if (device.found && device.deviceName.isNotBlank()) {
+                payload.put("sdr_device", device.deviceName)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "SDR scan for status failed: ${e.message}")
+        }
         // -1 = nothing ever decoded. A station that is online with a large or
         // missing value here is the "reachable but deaf" case: dead dongle,
         // unplugged antenna, or an SDR that was never attached.
