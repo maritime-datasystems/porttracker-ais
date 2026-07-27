@@ -874,6 +874,16 @@ class AisReceiverService : Service() {
                 var topicJson = prefs.getString("mqtt_topic_json", "") ?: ""
                 val format = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json"
                 val stationName = prefs.getString("pref_station_name", "") ?: ""
+                // Presence: published by the station itself, so "reachable"
+                // stays distinguishable from "hearing something".
+                val stationId = prefs.getInt("sharing_station_id", 0)
+                val topicStatus = if (stationId > 0) {
+                    "ais/status/SHARE/$stationId"
+                } else {
+                    ""
+                }
+                val antennaUuid = prefs.getString(
+                    PorttrackerAuth.PREF_ANTENNA_UUID, "") ?: ""
 
                 // Auto-construct topics from userId/antennaId if not explicitly set.
                 // This handles devices provisioned before auto-topic construction was added.
@@ -909,7 +919,10 @@ class AisReceiverService : Service() {
                         topicJson = topicJson,
                         format = format,
                         qos = 1,
-                        stationName = stationName
+                        stationName = stationName,
+                        topicStatus = topicStatus,
+                        stationId = stationId,
+                        antennaUuid = antennaUuid
                     )
                 )
 

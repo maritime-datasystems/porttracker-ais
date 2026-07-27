@@ -33,6 +33,9 @@ class MqttPublisher(private val context: Context) {
         private const val PENDING_QUEUE_CAP = 2000
         // Paho default is 10 in-flight QoS-1 publishes — far too low for AIS burst rates
         private const val MAX_INFLIGHT = 100
+        // Presence refresh. Long enough to be free on a metered connection,
+        // short enough that "last seen" means something.
+        private const val STATUS_INTERVAL_MS = 60_000L
 
         @Volatile
         var isConnected = false
@@ -59,7 +62,12 @@ class MqttPublisher(private val context: Context) {
         val topicJson: String,           // e.g. ais/aisc-json/SHARE/4/1000005
         val format: String = "aisc-json", // "aisc-json" or "raw"
         val qos: Int = 1,
-        val stationName: String = ""
+        val stationName: String = "",
+        // Presence topic (ais/status/SHARE/<station id>). Empty for stations
+        // provisioned before presence existed - they simply do not announce.
+        val topicStatus: String = "",
+        val stationId: Int = 0,
+        val antennaUuid: String = "",
     ) {
         /** Paho uses ssl:// not mqtts:// */
         val normalizedBrokerUrl: String
@@ -76,6 +84,7 @@ class MqttPublisher(private val context: Context) {
     // outage lasts. When full, the oldest sentences are dropped first.
     private val pendingMessages = LinkedBlockingQueue<String>(PENDING_QUEUE_CAP)
     private var batchExecutor: ScheduledExecutorService? = null
+    private var statusExecutor: ScheduledExecutorService? = null
     private val lifecycleLock = Object()
 
     /**
@@ -115,6 +124,16 @@ class MqttPublisher(private val context: Context) {
                 })
 
                 val options = buildConnectOptions(config)
+                // Register the will BEFORE connecting: the broker publishes it
+                // if we vanish without saying goodbye, which is the whole
+                // point - a station that loses power or signal must stop
+                // claiming to be online.
+                if (config.topicStatus.isNotBlank()) {
+                    options.setWill(
+                        config.topicStatus,
+                        statusPayload(config, online = false).toByteArray(),
+                        1, true)
+                }
                 Log.i(TAG, "Connecting to ${config.brokerUrl} as ${config.username}...")
                 client.connect(options).waitForCompletion(CONNECT_TIMEOUT_SEC * 1000L)
                 isConnected = true
@@ -129,6 +148,19 @@ class MqttPublisher(private val context: Context) {
                     BATCH_INTERVAL_MS,
                     TimeUnit.MILLISECONDS
                 )
+
+                publishStatus(online = true)
+                // Refresh presence periodically: it carries live counters
+                // (messages, radio age, SDR state) that the account page and
+                // the station detail page read, and it proves the session is
+                // still alive to anything that only sees retained state.
+                statusExecutor = Executors.newSingleThreadScheduledExecutor { r ->
+                    Thread(r, "MqttStatusTimer").apply { isDaemon = true }
+                }
+                statusExecutor?.scheduleAtFixedRate(
+                    { publishStatus(online = true) },
+                    STATUS_INTERVAL_MS, STATUS_INTERVAL_MS,
+                    TimeUnit.MILLISECONDS)
 
                 Log.i(TAG, "MQTT publisher started — topic: ${config.publishTopic}")
 
@@ -206,11 +238,75 @@ class MqttPublisher(private val context: Context) {
     }
 
     /**
+     * Announce this station's presence, retained, on its status topic.
+     *
+     * "Online" and "receiving data" are different states and a station is the
+     * only thing that can report the first: the backend cannot tell a station
+     * with a broken antenna from one that lost power. The payload also carries
+     * what the station knows about itself, which is what the detail page shows
+     * when reception drops to nothing.
+     */
+    private fun publishStatus(online: Boolean) {
+        val cfg = config ?: return
+        if (cfg.topicStatus.isBlank()) return
+        if (client?.isConnected != true) return
+        try {
+            val message = MqttMessage(
+                statusPayload(cfg, online).toByteArray(Charsets.UTF_8)).apply {
+                qos = 1
+                isRetained = true
+            }
+            client?.publish(cfg.topicStatus, message)
+        } catch (e: MqttException) {
+            Log.w(TAG, "MQTT status publish failed: ${e.message}")
+        }
+    }
+
+    private fun statusPayload(cfg: Config, online: Boolean): String {
+        val payload = org.json.JSONObject()
+        payload.put("online", online)
+        payload.put("station_id", cfg.stationId)
+        if (cfg.antennaUuid.isNotBlank()) {
+            payload.put("antenna_uuid", cfg.antennaUuid)
+        }
+        if (cfg.stationName.isNotBlank()) payload.put("station", cfg.stationName)
+        try {
+            val info = context.packageManager.getPackageInfo(
+                context.packageName, 0)
+            payload.put("app_version", info.versionName)
+            payload.put(
+                "version_code",
+                if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode
+                else @Suppress("DEPRECATION") info.versionCode.toLong())
+        } catch (_: Exception) {
+            // Version is nice to have, presence is not worth failing over.
+        }
+        if (!online) return payload.toString()
+        payload.put("messages_sent", messagesSent)
+        payload.put("messages_decoded", AisReceiverService.messageCount)
+        payload.put("service_running", AisReceiverService.isRunning)
+        // -1 = nothing ever decoded. A station that is online with a large or
+        // missing value here is the "reachable but deaf" case: dead dongle,
+        // unplugged antenna, or an SDR that was never attached.
+        val lastNmea = AisReceiverService.lastNmeaTime
+        payload.put(
+            "last_nmea_age_s",
+            if (lastNmea > 0) (System.currentTimeMillis() - lastNmea) / 1000
+            else -1)
+        return payload.toString()
+    }
+
+    /**
      * Disconnect and release resources.
      */
     fun stop() {
         synchronized(lifecycleLock) {
+            // Say goodbye properly while the connection is still up; the will
+            // only covers the case where we cannot.
+            publishStatus(online = false)
             try {
+                statusExecutor?.shutdownNow()
+                statusExecutor = null
                 batchExecutor?.shutdownNow()
                 batchExecutor = null
             } catch (e: Exception) {

@@ -1,8 +1,8 @@
 {
-  "version_code": 24,
-  "version_name": "3.0-0726-1336",
-  "apk_url": "https://github.com/maritime-datasystems/porttracker-aiscatcher/releases/download/v24/porttracker-ais.apk",
-  "apk_size": 29522872,
-  "release_notes": "In-app browser fixes (settings UI no longer blanks after the battery dialog, sign-in opens in an in-app Custom Tab, map locate button), chartplotter output (NMEA 0183 / NMEA 2000 over TCP/UDP for OpenCPN & co) and the new Station Doctor self-diagnostics.",
+  "version_code": 25,
+  "version_name": "3.0-0727-1229",
+  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v25/porttracker-ais.apk",
+  "apk_size": 29526143,
+  "release_notes": "Renamed to PortTracker AIS. The station now identifies itself by a uuid it generates once, so signing in again never creates a duplicate station, and it reports its own presence to the broker - your account can now tell 'offline' apart from 'online but hearing nothing'. Station Doctor and the settings pages fit a phone screen properly.",
   "min_version_code": 18
 }

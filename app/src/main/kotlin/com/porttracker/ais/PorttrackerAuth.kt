@@ -233,17 +233,17 @@ object PorttrackerAuth {
             val antennaUuid = antennaUuid(context)
 
             // One account may run several stations - only ever touch the one
-            // belonging to THIS device, identified by its antenna uuid (the
-            // hostname is a fallback for stations registered before the uuid
-            // existed, and for the server it is only a label).
+            // bound to THIS device's uuid (the hostname is a fallback for
+            // stations registered before the uuid existed; to the server it
+            // is only a label).
             var station = findOwnStation(apiBase, idToken, antennaUuid, hostname)
-            if (station == null || station.antennaUuid != antennaUuid) {
-                // Registers the station, or hands our uuid to a station that
-                // was matched by hostname alone (created before this device
-                // had a uuid). Registering is idempotent server-side: it
-                // matches on the uuid, falls back to the hostname, and returns
-                // the existing station either way. That requires an API that
-                // knows antennaUuid - deploy the API before shipping the app.
+            if (station == null || station.deviceUuid != antennaUuid) {
+                // Registers the station, or binds our uuid to one that was
+                // matched by hostname alone (created before this device had a
+                // uuid). Registering is idempotent server-side: it matches on
+                // the device uuid, falls back to the hostname, and returns the
+                // existing station either way. Needs an API that knows about
+                // device uuids - deploy the API before shipping the app.
                 station = createStation(
                     apiBase, idToken, hostname, antennaUuid, context)
             }
@@ -268,7 +268,10 @@ object PorttrackerAuth {
     private data class StationAccess(
         val stationId: Int,
         val hostname: String,
+        // Short code the website shows as the antenna id.
         val antennaUuid: String?,
+        // The uuid THIS device registered, as the backend has it bound.
+        val deviceUuid: String?,
         val protocol: String,
         val host: String,
         val port: Int,
@@ -297,6 +300,7 @@ object PorttrackerAuth {
             antennaUuid = station.optString("antennaUuid")
                 .ifBlank { station.optString("antenna_uuid") }
                 .ifBlank { null },
+            deviceUuid = stationDeviceUuid(station),
             protocol = access.str("protocol"),
             host = access.str("host"),
             port = access.getInt("port"),
@@ -321,7 +325,7 @@ object PorttrackerAuth {
         var byHostname = -1
         for (i in 0 until stations.length()) {
             val station = stations.getJSONObject(i).getJSONObject("station")
-            if (stationUuid(station) == antennaUuid) {
+            if (stationDeviceUuid(station) == antennaUuid) {
                 return parseStationInfo(stations.getJSONObject(i))
             }
             // Remember, but keep looking: a uuid match always wins, and the
@@ -336,9 +340,16 @@ object PorttrackerAuth {
         else parseStationInfo(stations.getJSONObject(byHostname))
     }
 
-    private fun stationUuid(station: JSONObject): String? =
-        station.optString("antennaUuid")
-            .ifBlank { station.optString("antenna_uuid") }
+    /**
+     * The device identifier the backend has bound to this station.
+     *
+     * Not the same thing as the antenna id: that is a short code the server
+     * assigns for people to read, while this is the uuid the device itself
+     * generated and is what identifies the hardware.
+     */
+    private fun stationDeviceUuid(station: JSONObject): String? =
+        station.optString("deviceUuid")
+            .ifBlank { station.optString("device_uuid") }
             .ifBlank { null }
 
     private fun createStation(
