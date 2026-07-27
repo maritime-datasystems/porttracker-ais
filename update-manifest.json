@@ -1,8 +1,8 @@
 {
-  "version_code": 27,
-  "version_name": "3.0-0727-1343",
-  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v27/porttracker-ais.apk",
-  "apk_size": 29527807,
-  "release_notes": "A signed-in station's performance link now opens PortTracker's own antenna page: reception per hour, vessels heard and coverage by direction. The TrustedDocks page stays available alongside it.",
+  "version_code": 28,
+  "version_name": "3.0-0727-1353",
+  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v28/porttracker-ais.apk",
+  "apk_size": 29530853,
+  "release_notes": "Two new settings, both off by default: send this station's position (so it sits in the right place on the map and its coverage can be measured), and give it a name and a type - for an antenna on a vessel, a van or a person, which is then followed as it moves.",
   "min_version_code": 18
 }
