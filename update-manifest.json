@@ -1,8 +1,8 @@
 {
-  "version_code": 28,
-  "version_name": "3.0-0727-1353",
-  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v28/porttracker-ais.apk",
-  "apk_size": 29530853,
-  "release_notes": "Two new settings, both off by default: send this station's position (so it sits in the right place on the map and its coverage can be measured), and give it a name and a type - for an antenna on a vessel, a van or a person, which is then followed as it moves.",
+  "version_code": 29,
+  "version_name": "3.0-0727-1424",
+  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v29/porttracker-ais.apk",
+  "apk_size": 29531034,
+  "release_notes": "The station now reports whether an SDR receiver is plugged in, so your account pages can tell 'no receiver attached' apart from 'receiver attached, hearing nothing'.",
   "min_version_code": 18
 }
