@@ -1,8 +1,8 @@
 {
-  "version_code": 29,
-  "version_name": "3.0-0727-1424",
-  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v29/porttracker-ais.apk",
-  "apk_size": 29531034,
-  "release_notes": "The station now reports whether an SDR receiver is plugged in, so your account pages can tell 'no receiver attached' apart from 'receiver attached, hearing nothing'.",
+  "version_code": 30,
+  "version_name": "3.0-0728-1118",
+  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v30/porttracker-ais.apk",
+  "apk_size": 29532076,
+  "release_notes": "The receiver now runs under the service type Android reserves for USB devices, so newer Android versions will not cap a 24/7 station's runtime. The web interface asks for a password out of the box (admin/admin - change it).",
   "min_version_code": 18
 }
