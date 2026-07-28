@@ -76,8 +76,8 @@
         <SwitchPreferenceCompat
             android:key="web_auth_enabled"
             android:title="Require Password"
-            android:summary="Protect web interface with username/password"
-            android:defaultValue="false"
+            android:summary="Protect web interface with username/password (default admin / admin — change it)"
+            android:defaultValue="true"
             app:iconSpaceReserved="false" />
 
         <EditTextPreference

@@ -6,7 +6,23 @@
     
     <!-- Permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+      Three service types, picked at runtime by AisReceiverService.
+
+      connectedDevice is what a station actually is: a process talking to a USB
+      receiver. dataSync used to be the only declared type, and from Android 15
+      that type carries a daily runtime cap - fine for something that syncs and
+      stops, fatal for a receiver meant to run for months. dataSync is kept for
+      the web-only mode, where there is no dongle to justify connectedDevice and
+      nothing is being received anyway.
+
+      location is needed because the service reads position (GpsForwarder,
+      MqttPublisher, NmeaOutputServer); from Android 14 a foreground service
+      without this type is simply refused the fix.
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -58,9 +74,9 @@
         <!-- AIS Receiver Foreground Service -->
         <service
             android:name=".AisReceiverService"
+            android:foregroundServiceType="connectedDevice|dataSync|location"
             android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:exported="false" />
 
         <!-- Boot Receiver for auto-start -->
         <receiver

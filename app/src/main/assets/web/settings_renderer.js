@@ -554,8 +554,9 @@ var SettingsRenderer = {
                 <div class="card-header"><i class="bi bi-shield-lock"></i> Web Authentication</div>
                 <div class="card-body">
                     <div class="mb-3 form-check form-switch">
-                        <input class="form-check-input" type="checkbox" id="web_auth_enabled" ${this.bool('web_auth_enabled') ? 'checked' : ''}>
+                        <input class="form-check-input" type="checkbox" id="web_auth_enabled" ${this.bool('web_auth_enabled', true) ? 'checked' : ''}>
                         <label class="form-check-label" for="web_auth_enabled">Require password for web access</label>
+                        <div class="form-text">On by default. Anyone on this network can otherwise read the settings and the log, credentials included.</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Username</label>
@@ -565,11 +566,12 @@ var SettingsRenderer = {
                         <label class="form-label">Password</label>
                         <div class="input-group">
                             <input type="password" class="form-control" id="web_auth_password" value="${this.val('web_auth_password', 'admin')}">
-                            <button class="btn btn-outline-secondary" type="button" 
+                            <button class="btn btn-outline-secondary" type="button"
                                 onclick="const i=document.getElementById('web_auth_password'); i.type = i.type==='password' ? 'text' : 'password'">
                                 <i class="bi bi-eye"></i>
                             </button>
                         </div>
+                        <div class="form-text">Ships as <code>admin</code> / <code>admin</code>. Change it if the station shares a network with anyone else.</div>
                     </div>
                     <div class="alert alert-warning mb-0">
                         ⚠️ Changing authentication settings will take effect after service restart.

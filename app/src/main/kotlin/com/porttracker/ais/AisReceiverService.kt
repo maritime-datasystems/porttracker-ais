@@ -334,9 +334,12 @@ class AisReceiverService : Service() {
             val user = prefs.getString("web_auth_username", "") ?: ""
             val pass = prefs.getString("web_auth_password", "") ?: ""
 
-            if (user.isNotEmpty() && pass.isNotEmpty()) {
+            // The shipped admin/admin gates the LAN, but it is public knowledge
+            // and the tunnel puts the station on a hostname anyone can reach.
+            // Treat it as unconfigured so the generated password below wins.
+            if (!WebAuth.isStillDefault(user, pass)) {
                 // Make sure enforcement is on for the non-local path.
-                if (!prefs.getBoolean("web_auth_enabled", false)) {
+                if (!prefs.getBoolean("web_auth_enabled", WebAuth.ENABLED_BY_DEFAULT)) {
                     prefs.edit().putBoolean("web_auth_enabled", true).apply()
                 }
                 return true
@@ -801,13 +804,79 @@ class AisReceiverService : Service() {
         }
     }
 
+    /**
+     * Enter the foreground under the service type that matches what we are
+     * actually doing right now.
+     *
+     * This used to always declare dataSync. From Android 15 that type is capped
+     * at a few hours of runtime per day, which would quietly kill a station that
+     * is supposed to run for months. A station with a receiver plugged in is a
+     * connectedDevice service - the case the type exists for - and carries no
+     * such cap. Without a dongle there is nothing to connect to, so the web-only
+     * mode stays on dataSync; it is not receiving anything either way.
+     *
+     * The type is re-evaluated on every start, and plugging a dongle in fires
+     * UsbDeviceReceiver -> onStartCommand, so a station upgrades itself as soon
+     * as it has hardware to justify it.
+     *
+     * Every step degrades rather than throws: an unmet prerequisite for a type
+     * makes startForeground throw SecurityException, and a service that cannot
+     * enter the foreground is a station that is simply gone.
+     */
     private fun startForegroundWithNotification(text: String) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, createNotification(text), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, createNotification(text))
+        val notification = createNotification(text)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification)
+            return
         }
+
+        var primary = if (hasUsbDeviceAttached()) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        }
+        if (hasLocationPermission()) {
+            primary = primary or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        }
+
+        // Fall back through progressively weaker claims rather than die.
+        val attempts = listOf(
+            primary,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            0,
+        )
+        for (type in attempts) {
+            try {
+                if (type == 0) {
+                    startForeground(NOTIFICATION_ID, notification)
+                } else {
+                    startForeground(NOTIFICATION_ID, notification, type)
+                }
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "startForeground rejected service type $type: ${e.message}")
+            }
+        }
+        Log.e(TAG, "Could not enter the foreground under any service type.")
     }
+
+    /** True if any USB device is currently attached, dongle or otherwise. */
+    private fun hasUsbDeviceAttached(): Boolean = try {
+        val usbManager = getSystemService(USB_SERVICE) as android.hardware.usb.UsbManager
+        usbManager.deviceList.isNotEmpty()
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not read the USB device list: ${e.message}")
+        false
+    }
+
+    /** Claiming the location service type without the permission is refused. */
+    private fun hasLocationPermission(): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     private fun createNotification(text: String): Notification {
         lastNotificationText = text

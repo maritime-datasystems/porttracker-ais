@@ -1338,7 +1338,7 @@ class AdminWebServer(
         val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(service)
 
         val isRemote = isRemoteRequest(session)
-        val authEnabled = prefs.getBoolean("web_auth_enabled", false)
+        val authEnabled = prefs.getBoolean("web_auth_enabled", WebAuth.ENABLED_BY_DEFAULT)
         val remoteIp = session.remoteIpAddress ?: ""
         Log.d(TAG, "Auth check: remoteIp=$remoteIp isRemote=$isRemote authEnabled=$authEnabled")
 
@@ -1349,8 +1349,8 @@ class AdminWebServer(
             // authEnabled + LAN: fall through to credential check below.
         }
 
-        val requiredUsername = prefs.getString("web_auth_username", "") ?: ""
-        val requiredPassword = prefs.getString("web_auth_password", "") ?: ""
+        val requiredUsername = prefs.getString("web_auth_username", WebAuth.USERNAME) ?: WebAuth.USERNAME
+        val requiredPassword = prefs.getString("web_auth_password", WebAuth.PASSWORD) ?: WebAuth.PASSWORD
 
         // No credentials configured: fail closed for remote, allow for local
         // (the local user has no way to authenticate, and the tunnel is gated
