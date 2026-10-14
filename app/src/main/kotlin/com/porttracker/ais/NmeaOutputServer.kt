@@ -229,8 +229,8 @@ class NmeaOutputServer(
         private val queue = LinkedBlockingQueue<ByteArray>(CLIENT_QUEUE_CAPACITY)
         @Volatile private var open = true
         private val writer = Thread {
-            val out: OutputStream = socket.getOutputStream()
             try {
+                val out: OutputStream = socket.getOutputStream()
                 while (open) {
                     val data = queue.poll(2, TimeUnit.SECONDS) ?: continue
                     out.write(data)
@@ -241,7 +241,9 @@ class NmeaOutputServer(
             } finally {
                 close()
             }
-        }.apply { name = "NmeaOut-Client"; isDaemon = true; start() }
+        }.apply { name = "NmeaOut-Client"; isDaemon = true }
+
+        fun start() = writer.start()
 
         fun offer(data: ByteArray) {
             if (!queue.offer(data)) {
@@ -275,8 +277,10 @@ class NmeaOutputServer(
                 continue
             }
             socket.tcpNoDelay = true
-            clients.add(TcpClient(socket))
+            val client = TcpClient(socket)
+            clients.add(client)
             tcpClients = clients.size
+            client.start()
             Log.i(TAG, "Client connected from ${socket.inetAddress.hostAddress} " +
                 "(${clients.size} total)")
         }

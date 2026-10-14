@@ -34,9 +34,11 @@ class AisReceiverService : Service() {
         // Callbacks from native code (called via AisCatcherJava bridge).
         // Hot path — runs for every decoded sentence; no logging here.
         @JvmStatic fun onNMEA(nmea: String) {
-            incrementMessageCount()
-            lastNmeaTime = System.currentTimeMillis()
-            nmeaListeners.forEach { it.onNMEA(nmea) }
+            for (sentence in nmeaSentences(nmea)) {
+                incrementMessageCount()
+                lastNmeaTime = System.currentTimeMillis()
+                nmeaListeners.forEach { it.onNMEA(sentence) }
+            }
         }
 
         /** Wall-clock time of the last decoded sentence (0 = none yet). */
@@ -473,11 +475,9 @@ class AisReceiverService : Service() {
             addAction(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED)
             addAction("com.porttracker.ais.USB_PERMISSION")
         }
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(usbReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(usbReceiver, filter)
-        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, usbReceiver, filter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         Log.i(TAG, "USB attach/detach receiver registered")
     }
 
@@ -860,10 +860,13 @@ class AisReceiverService : Service() {
         Log.e(TAG, "Could not enter the foreground under any service type.")
     }
 
-    /** True if any USB device is currently attached, dongle or otherwise. */
+    /** A supported USB device with permission satisfies the connectedDevice prerequisite. */
     private fun hasUsbDeviceAttached(): Boolean = try {
         val usbManager = getSystemService(USB_SERVICE) as android.hardware.usb.UsbManager
-        usbManager.deviceList.isNotEmpty()
+        usbManager.deviceList.values.any { device ->
+            SupportedDevices.isSupportedDevice(device.vendorId, device.productId) &&
+                usbManager.hasPermission(device)
+        }
     } catch (e: Exception) {
         Log.w(TAG, "Could not read the USB device list: ${e.message}")
         false

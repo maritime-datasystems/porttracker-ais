@@ -22,6 +22,8 @@
 #include <vector>
 #include <string>
 #include <sstream>
+#include <atomic>
+#include <mutex>
 
 const int TIME_CONSTRAINT = 120;
 bool communityFeed = false;
@@ -71,6 +73,7 @@ static std::unique_ptr<IO::TCPlistenerStreamer> TCP_listener = nullptr;
 int webviewer_port = -1;
 
 std::string nmea_msg;
+static std::mutex nmea_mutex;
 std::string json_queue;
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *, void *) {
@@ -147,6 +150,7 @@ static void callbackNMEA(JNIEnv *env, const std::string &str) {
     jstring jstr = env->NewStringUTF(str.c_str());
     jmethodID method = env->GetStaticMethodID(javaClass, "onNMEA", "(Ljava/lang/String;)V");
     env->CallStaticVoidMethod(javaClass, method, jstr);
+    env->DeleteLocalRef(jstr);
 }
 
 static void callbackMessage(JNIEnv *env, const std::string &str) {
@@ -154,6 +158,7 @@ static void callbackMessage(JNIEnv *env, const std::string &str) {
     jstring jstr = env->NewStringUTF(str.c_str());
     jmethodID method = env->GetStaticMethodID(javaClass, "onMessage", "(Ljava/lang/String;)V");
     env->CallStaticVoidMethod(javaClass, method, jstr);
+    env->DeleteLocalRef(jstr);
 }
 
 static void callbackConsole(JNIEnv *env, const std::string &str) {
@@ -161,6 +166,7 @@ static void callbackConsole(JNIEnv *env, const std::string &str) {
     jstring jstr = env->NewStringUTF(str.c_str());
     jmethodID method = env->GetStaticMethodID(javaClass, "onStatus", "(Ljava/lang/String;)V");
     env->CallStaticVoidMethod(javaClass, method, jstr);
+    env->DeleteLocalRef(jstr);
 }
 
 static void callbackConsoleFormat(JNIEnv *env, const char *format, ...) {
@@ -173,6 +179,7 @@ static void callbackConsoleFormat(JNIEnv *env, const char *format, ...) {
     jstring jstr = env->NewStringUTF(buffer);
     jmethodID method = env->GetStaticMethodID(javaClass, "onStatus", "(Ljava/lang/String;)V");
     env->CallStaticVoidMethod(javaClass, method, jstr);
+    env->DeleteLocalRef(jstr);
 
     va_end (args);
 }
@@ -193,6 +200,7 @@ static void callbackError(JNIEnv *env, const std::string &str) {
     jstring jstr = env->NewStringUTF(str.c_str());
     jmethodID method = env->GetStaticMethodID(javaClass, "onError", "(Ljava/lang/String;)V");
     env->CallStaticVoidMethod(javaClass, method, jstr);
+    env->DeleteLocalRef(jstr);
 }
 
 // AIS-catcher model
@@ -204,9 +212,8 @@ class NMEAcounter : public StreamIn<AIS::Message> {
 public:
 
     void Receive(const AIS::Message *data, int len, TAG &tag) {
-        std::string str;
-
         for (int i = 0; i < len; i++) {
+            std::string str;
             for (const auto &s: data[i].NMEA) {
                 str.append("\n" + s);
             }
@@ -223,6 +230,7 @@ public:
             if (msg > 27 || msg < 1) statistics.Error++;
             if (msg <= 27) statistics.Msg[msg]++;
 
+            std::lock_guard<std::mutex> lock(nmea_mutex);
             nmea_msg += str;
         }
     }
@@ -262,7 +270,7 @@ Device::Device *device = nullptr;
 static std::unique_ptr<AIS::Model> model = nullptr;
 AIS::JSONAIS json2ais;
 
-bool stop = false;
+std::atomic<bool> stop{false};
 
 void StopRequest() {
     stop = true;
@@ -270,11 +278,12 @@ void StopRequest() {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_jvdegithub_aiscatcher_AisCatcherJava_InitNative(JNIEnv *env, jclass instance, jint port) {
+Java_com_jvdegithub_aiscatcher_AisCatcherJava_InitNative(JNIEnv *env, jclass instance, jint port, jstring bindAddress) {
     Logger::getInstance().setMaxBufferSize(50);
 
     env->GetJavaVM(&javaVm);
     javaVersion = env->GetVersion();
+    if (javaClass) env->DeleteGlobalRef(javaClass);
     javaClass = (jclass) env->NewGlobalRef(instance);
 
     Info() << "AIS-Catcher " VERSION;
@@ -282,6 +291,7 @@ Java_com_jvdegithub_aiscatcher_AisCatcherJava_InitNative(JNIEnv *env, jclass ins
 
     memset(&statistics, 0, sizeof(statistics));
 
+    server.Set("IP_BIND", toString(env, bindAddress));
     server.Set("PORT",std::to_string(port));
     server.Set("STATION","Android");
     server.Set("SHARE_LOC","ON");
@@ -404,10 +414,12 @@ Java_com_jvdegithub_aiscatcher_AisCatcherJava_Run(JNIEnv *env, jclass) {
             std::this_thread::sleep_for(std::chrono::milliseconds(TIME_INTERVAL));
 
             callbackUpdate(env);
-            if (!nmea_msg.empty()) {
-                callbackNMEA(env, nmea_msg);
-                nmea_msg = "";
+            std::string batch;
+            {
+                std::lock_guard<std::mutex> lock(nmea_mutex);
+                batch.swap(nmea_msg);
             }
+            if (!batch.empty()) callbackNMEA(env, batch);
             if(++time_idx % 30 == 0)
             Info() << "Msg Count: " << statistics.Total;
         }
@@ -584,6 +596,7 @@ Java_com_jvdegithub_aiscatcher_AisCatcherJava_createReceiver(JNIEnv *env, jclass
             throw std::runtime_error("Cannot create Web Viewer)");
         }
 
+        webviewer->Set("IP_BIND", "127.0.0.1");
         webviewer->Set("PORT", std::to_string(webviewer_port));
         webviewer->Set("STATION", "Android");
         webviewer->Set("SHARE_LOC","ON");
@@ -672,6 +685,7 @@ Java_com_jvdegithub_aiscatcher_AisCatcherJava_getSampleRate(JNIEnv *env, jclass 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_jvdegithub_aiscatcher_AisCatcherJava_00024Statistics_Init(JNIEnv *env, jclass instance) {
+    if (javaStatisticsClass) env->DeleteGlobalRef(javaStatisticsClass);
     javaStatisticsClass = (jclass) env->NewGlobalRef(instance);
     memset(&statistics, 0, sizeof(statistics));
 }

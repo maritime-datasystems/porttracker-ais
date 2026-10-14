@@ -70,7 +70,11 @@ object PhoneStatusTracker : LocationListener, SensorEventListener {
     }
 
     private fun start(context: Context) {
-        if (active || !permissionGranted) return
+        if (active) return
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) !=
+                PackageManager.PERMISSION_GRANTED &&
+            ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) !=
+                PackageManager.PERMISSION_GRANTED) return
         active = true
         try {
             val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager

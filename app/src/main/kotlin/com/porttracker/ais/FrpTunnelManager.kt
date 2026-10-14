@@ -111,12 +111,14 @@ class FrpTunnelManager(private val context: Context) {
         val binary = prepareBinary()
         if (binary == null || !binary.exists()) {
             Log.e(TAG, "Failed to prepare frpc binary")
+            isRunning.set(false)
             return false
         }
         
         val config = generateConfig(stationName, webPort)
         if (config == null || !config.exists()) {
             Log.e(TAG, "Failed to generate config")
+            isRunning.set(false)
             return false
         }
         
@@ -170,33 +172,33 @@ class FrpTunnelManager(private val context: Context) {
      */
     fun stopTunnel() {
         if (!isRunning.compareAndSet(true, false)) return
-                try {
-                    frpProcess?.let { process ->
-                        Log.i(TAG, "Stopping tunnel...")
-                        InternalLog.log("Stopping tunnel...")
-                        process.destroy()
-                        
-                        // Force kill if not stopped after 3 seconds
-                        Thread {
-                            try {
-                                Thread.sleep(3000)
-                                if (process.isAlive) {
-                                    process.destroyForcibly()
-                                    Log.w(TAG, "Tunnel force killed")
-                                    InternalLog.log("Tunnel force killed")
-                                }
-                            } catch (e: InterruptedException) {
-                                // Ignore
-                            }
-                        }.start()
+        try {
+            frpProcess?.let { process ->
+                Log.i(TAG, "Stopping tunnel...")
+                InternalLog.log("Stopping tunnel...")
+                process.destroy()
+
+                // Force kill if not stopped after 3 seconds
+                Thread {
+                    try {
+                        Thread.sleep(3000)
+                        if (android.os.Build.VERSION.SDK_INT >= 26 && process.isAlive) {
+                            process.destroyForcibly()
+                            Log.w(TAG, "Tunnel force killed")
+                            InternalLog.log("Tunnel force killed")
+                        }
+                    } catch (e: InterruptedException) {
+                        // Ignore
                     }
-                    frpProcess = null
-                    Log.i(TAG, "Tunnel stopped")
-                    InternalLog.log("Tunnel stopped")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error stopping tunnel", e)
-                    InternalLog.log("Error stopping tunnel: ${e.message}")
-                }
+                }.start()
+            }
+            frpProcess = null
+            Log.i(TAG, "Tunnel stopped")
+            InternalLog.log("Tunnel stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping tunnel", e)
+            InternalLog.log("Error stopping tunnel: ${e.message}")
+        }
     }
     
     /**

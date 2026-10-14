@@ -74,10 +74,10 @@ class SettingsActivity : AppCompatActivity() {
                         Log.i(TAG, "Service running, restarting with USB device...")
                         stopService(Intent(context, AisReceiverService::class.java))
                         Handler(Looper.getMainLooper()).postDelayed({
-                            startForegroundService(serviceIntent)
+                            androidx.core.content.ContextCompat.startForegroundService(this@SettingsActivity, serviceIntent)
                         }, 1500)
                     } else {
-                        startForegroundService(serviceIntent)
+                        androidx.core.content.ContextCompat.startForegroundService(this@SettingsActivity, serviceIntent)
                     }
                     // Reload web UI to reflect new status
                     webView?.postDelayed({ loadWebUI() }, 3000)
@@ -155,11 +155,9 @@ class SettingsActivity : AppCompatActivity() {
 
         // Register USB permission receiver
         val filter = IntentFilter(USB_PERMISSION_ACTION)
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(usbPermissionReceiver, filter)
-        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, usbPermissionReceiver, filter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
 
         // Check USB permission at startup
         Handler(Looper.getMainLooper()).postDelayed({
@@ -183,14 +181,14 @@ class SettingsActivity : AppCompatActivity() {
                             putExtra("USB_VENDOR_ID", deviceInfo.vendorId)
                             putExtra("USB_PRODUCT_ID", deviceInfo.productId)
                         }
-                        startForegroundService(intent)
+                        androidx.core.content.ContextCompat.startForegroundService(this@SettingsActivity, intent)
                     } else {
                         // Start in web-only mode — always needed for the WebView UI
                         val intent = Intent(this, AisReceiverService::class.java).apply {
                             putExtra("USB_VENDOR_ID", 0)
                             putExtra("USB_PRODUCT_ID", 0)
                         }
-                        startForegroundService(intent)
+                        androidx.core.content.ContextCompat.startForegroundService(this@SettingsActivity, intent)
                         Toast.makeText(this, "🌐 Starting web server...", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -326,6 +324,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
 
+            @android.annotation.TargetApi(26)
             override fun onRenderProcessGone(
                 view: WebView?,
                 detail: RenderProcessGoneDetail?
@@ -349,8 +348,7 @@ class SettingsActivity : AppCompatActivity() {
                 // External pages open in Custom Tabs, so any other origin
                 // here is unexpected — deny it.
                 if (origin == null || callback == null ||
-                    !(origin.startsWith("http://127.0.0.1") ||
-                      origin.startsWith("http://localhost"))) {
+                    !isLocalHttp(Uri.parse(origin))) {
                     callback?.invoke(origin, false, false)
                     return
                 }
@@ -376,7 +374,10 @@ class SettingsActivity : AppCompatActivity() {
     /** True for http(s) URLs served by the app's own local web server. */
     private fun isLocalHttp(uri: Uri): Boolean {
         if (uri.scheme != "http" && uri.scheme != "https") return false
-        return uri.host in setOf("127.0.0.1", "localhost", "[::1]", "::1")
+        val port = PreferenceManager.getDefaultSharedPreferences(this)
+            .getString("pref_local_web_port", "8080")?.toIntOrNull() ?: 8080
+        return uri.scheme == "http" && uri.port == port &&
+            uri.host in setOf("127.0.0.1", "localhost", "[::1]", "::1")
     }
 
     /** Open a URL outside the WebView: Custom Tab first (in-app feel, and
@@ -518,7 +519,7 @@ class SettingsActivity : AppCompatActivity() {
                             putExtra("USB_VENDOR_ID", device.vendorId)
                             putExtra("USB_PRODUCT_ID", device.productId)
                         }
-                        startForegroundService(serviceIntent)
+                        androidx.core.content.ContextCompat.startForegroundService(this@SettingsActivity, serviceIntent)
                     }
                 } else {
                     // Request permission - this time the "Always open" checkbox will be available!

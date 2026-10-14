@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- USB Host for SDR devices -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
@@ -71,10 +72,12 @@
             android:theme="@android:style/Theme.NoDisplay"
             android:excludeFromRecents="true" />
 
-        <!-- AIS Receiver Foreground Service -->
+        <!-- connectedDevice uses UsbManager permission (checked at runtime),
+             which this AGP lint version does not recognize as a prerequisite. -->
         <service
             android:name=".AisReceiverService"
             android:foregroundServiceType="connectedDevice|dataSync|location"
+            tools:ignore="ForegroundServicePermission"
             android:enabled="true"
             android:exported="false" />
 

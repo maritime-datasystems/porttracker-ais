@@ -56,11 +56,6 @@ class AdminWebServer(
             }
         }
 
-        // 1. Admin API Endpoints
-        if (uri.startsWith("/admin/")) {
-            return handleAdminApi(session)
-        }
-
         // 1.5 NMEA buffer endpoint — returns recent NMEA as JSON array (polling-friendly)
         if (uri == "/api/nmea_buffer" || uri == "/admin/api/nmea_buffer") {
             return handleNmeaBuffer(session)
@@ -69,6 +64,11 @@ class AdminWebServer(
         // 1.6 Direct NMEA SSE stream — bypasses C++ server, uses native NMEA callbacks
         if (uri == "/api/sse" || uri == "/admin/api/nmea_stream") {
             return handleNmeaSse()
+        }
+
+        // 1. Admin API Endpoints
+        if (uri.startsWith("/admin/")) {
+            return handleAdminApi(session)
         }
 
         // 2. Reverse Proxy for Internal C++ API
