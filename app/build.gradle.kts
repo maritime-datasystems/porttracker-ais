@@ -34,6 +34,9 @@ android {
             // and nobody has to uninstall (and lose station settings) to try
             // the store build. Permanent once uploaded to Play.
             applicationId = "co.porttracker.ais"
+            // Play's automatic protection requires API 24+. The sideload
+            // flavor keeps the default minSdk for older fleet phones.
+            minSdk = 24
             buildConfigField("boolean", "ALLOW_SIDELOAD_UPDATES", "false")
         }
     }
