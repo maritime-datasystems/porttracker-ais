@@ -34,17 +34,6 @@ object SupportedDevices {
         SdrDevice(0x1B80, 0xD393, DeviceType.RTLSDR, "SVEON"),
     )
 
-    // ── AirSpy ───────────────────────────────────────────────────────────
-    val AIRSPY_DEVICES: List<SdrDevice> = listOf(
-        SdrDevice(0x1D50, 0x60A1, DeviceType.AIRSPY,   "AirSpy Mini/R2"),
-        SdrDevice(0x1D50, 0x60A6, DeviceType.AIRSPYHF, "AirSpy HF+"),
-    )
-
-    // ── AirSpy HF+ (alternate VID) ──────────────────────────────────────
-    val AIRSPYHF_ALT_DEVICES: List<SdrDevice> = listOf(
-        SdrDevice(0x03EB, 0x800C, DeviceType.AIRSPYHF, "AirSpy HF+ (alt)"),
-    )
-
     // ── HackRF ───────────────────────────────────────────────────────────
     val HACKRF_DEVICES: List<SdrDevice> = listOf(
         SdrDevice(0x1D50, 0x6089, DeviceType.RTLSDR, "HackRF"),
@@ -52,7 +41,7 @@ object SupportedDevices {
 
     /** Every supported device across all families. */
     val ALL_DEVICES: List<SdrDevice> =
-        RTL_SDR_DEVICES + AIRSPY_DEVICES + AIRSPYHF_ALT_DEVICES + HACKRF_DEVICES
+        RTL_SDR_DEVICES + HACKRF_DEVICES
 
     /** Quick look-up: is the VID/PID pair supported? */
     fun isSupportedDevice(vendorId: Int, productId: Int): Boolean =

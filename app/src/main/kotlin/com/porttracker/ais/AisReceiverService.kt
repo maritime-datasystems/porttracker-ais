@@ -189,7 +189,7 @@ class AisReceiverService : Service() {
 
         // Get configuration from intent or preferences
         val config = loadConfig()
-        currentSource = intent?.getIntExtra("SOURCE", config.deviceType.ordinal) ?: config.deviceType.ordinal
+        currentSource = intent?.getIntExtra("SOURCE", config.deviceType.sourceId) ?: config.deviceType.sourceId
 
 
         // Open USB device - try intent first, then scan for SDR
@@ -1190,7 +1190,7 @@ data class ServiceConfig(
             }
             
             return ServiceConfig(
-                deviceType = DeviceType.entries.getOrElse(prefs.getString("device_type", "1")?.toIntOrNull() ?: 1) { DeviceType.RTLSDR },
+                deviceType = DeviceType.fromSourceId(prefs.getString("device_type", "1")?.toIntOrNull() ?: 1),
                 udpOutputs = udpOutputs,
                 tcpEnabled = prefs.getBoolean("tcp_enabled", false),
                 tcpPort = prefs.getString("tcp_port", "10111")?.toIntOrNull() ?: 10111,
@@ -1221,10 +1221,13 @@ data class ServiceConfig(
 /**
  * SDR device types
  */
-enum class DeviceType {
-    RTLTCP,
-    RTLSDR,
-    AIRSPY,
-    AIRSPYHF,
-    SPYSERVER
+enum class DeviceType(val sourceId: Int) {
+    RTLTCP(0),
+    RTLSDR(1),
+    SPYSERVER(4);
+
+    companion object {
+        // Persisted/JNI IDs must not shift when a receiver is removed.
+        fun fromSourceId(id: Int): DeviceType = entries.firstOrNull { it.sourceId == id } ?: RTLSDR
+    }
 }

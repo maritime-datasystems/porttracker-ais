@@ -234,8 +234,6 @@ var SettingsRenderer = {
                 <select class="form-select" id="device_type">
                     <option value="1" ${this.val('device_type') === '1' ? 'selected' : ''}>RTL-SDR</option>
                     <option value="0" ${this.val('device_type') === '0' ? 'selected' : ''}>RTL-TCP</option>
-                    <option value="2" ${this.val('device_type') === '2' ? 'selected' : ''}>AirSpy</option>
-                    <option value="3" ${this.val('device_type') === '3' ? 'selected' : ''}>AirSpy HF+</option>
                     <option value="4" ${this.val('device_type') === '4' ? 'selected' : ''}>SpyServer</option>
                 </select>
             </div>
@@ -962,7 +960,7 @@ var SettingsRenderer = {
     },
 
     getDeviceTypeName: function (val) {
-        const types = { '0': 'RTL-TCP', '1': 'RTL-SDR', '2': 'AirSpy', '3': 'AirSpy HF+', '4': 'SpyServer' };
+        const types = { '0': 'RTL-TCP', '1': 'RTL-SDR', '4': 'SpyServer' };
         return types[val] || 'Unknown';
     },
 

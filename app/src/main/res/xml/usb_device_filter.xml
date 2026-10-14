@@ -37,9 +37,7 @@
     <!-- Genius (0x0458 = 1112) -->
     <usb-device vendor-id="1112" product-id="28799" />
     
-    <!-- AirSpy (0x1D50 = 7504) -->
-    <usb-device vendor-id="7504" product-id="24737" />
-    <usb-device vendor-id="7504" product-id="24742" />
+    <!-- HackRF (0x1D50 = 7504) -->
     <usb-device vendor-id="7504" product-id="24713" />
     
     <!-- Other RTL-SDR variants -->
@@ -63,5 +61,4 @@
     <usb-device vendor-id="6235" product-id="1568" />
     <usb-device vendor-id="6235" product-id="1616" />
     <usb-device vendor-id="6235" product-id="1664" />
-    <usb-device vendor-id="1003" product-id="32780" />
 </resources>

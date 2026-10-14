@@ -5,7 +5,7 @@ A minimal headless AIS receiver service for Android. This app runs as a backgrou
 ## Features
 
 - **Headless Operation**: Runs as an Android foreground service (wake + WiFi lock, battery-exemption prompt, sticky restart)
-- **USB SDR Support**: RTL-SDR, AirSpy, AirSpy HF+
+- **USB SDR Support**: RTL-SDR
 - **Network Sources**: RTL-TCP, SpyServer
 - **Multiple Outputs**:
   - MQTT to PortTracker/TrustedDocks (provisioned via API key, `aisc-json` or raw)
@@ -28,7 +28,7 @@ Full component/threading/API documentation: **[docs/ARCHITECTURE.md](docs/ARCHIT
 ## Building
 
 This project is **self-contained**: the native C++ sources (AIS-catcher,
-libusb, rtl-sdr, airspy) are vendored under `app/src/main/jni/`, so no sibling
+libusb, rtl-sdr) are vendored under `app/src/main/jni/`, so no sibling
 checkout is required.
 
 ```bash
@@ -93,7 +93,7 @@ Access `http://<phone-ip>:8080` from any browser when the service is running.
 ├─────────────────────────────────────────────┤
 │            AIScatcherNDK (JNI)              │
 │  ┌─────────┐ ┌─────────┐ ┌─────────────┐   │
-│  │ RTL-SDR │ │ AirSpy  │ │ AIS Decoder │   │
+│  │ RTL-SDR │ │ libusb  │ │ AIS Decoder │   │
 │  └─────────┘ └─────────┘ └─────────────┘   │
 ├─────────────────────────────────────────────┤
 │               Data Outputs                  │

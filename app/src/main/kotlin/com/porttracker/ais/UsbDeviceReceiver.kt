@@ -111,7 +111,7 @@ class UsbDeviceReceiver : BroadcastReceiver() {
         val serviceIntent = Intent(context, AisReceiverService::class.java).apply {
             putExtra("USB_VENDOR_ID", device.vendorId)
             putExtra("USB_PRODUCT_ID", device.productId)
-            putExtra("SOURCE", deviceType.ordinal)
+            putExtra("SOURCE", deviceType.sourceId)
         }
         ContextCompat.startForegroundService(context, serviceIntent)
     }

@@ -3,7 +3,7 @@
 # Re-vendor the native AIS-catcher C++ sources into this repo.
 #
 # porttracker-ais is self-contained: the native sources
-# (AIS-catcher, libusb, rtl-sdr, airspy) live under app/src/main/jni/ and are
+# (AIS-catcher, libusb, rtl-sdr) live under app/src/main/jni/ and are
 # committed, so the project builds without any sibling checkout. This script
 # refreshes that vendored copy from an upstream AIS-catcher-for-Android tree
 # (with submodules initialised).
@@ -15,7 +15,7 @@
 # Prepare upstream first:
 #   git clone --recurse-submodules https://github.com/jvde-github/AIS-catcher-for-Android.git
 #
-# After running, rebuild to verify:  ./gradlew assembleDebug
+# After running, rebuild to verify:  ./gradlew assembleSideloadDebug
 #
 # NOTE: CMakeLists.txt lists the exact source files compiled; if upstream adds
 # or renames files, update app/src/main/jni/CMakeLists.txt accordingly.
@@ -35,7 +35,7 @@ fi
 
 # Subtrees referenced by CMakeLists.txt. CMakeLists.txt itself is NOT overwritten
 # (it is maintained in this repo).
-SUBTREES=(libusb rtl-sdr airspyone_host airspyhf AIS-catcher JNI)
+SUBTREES=(libusb rtl-sdr AIS-catcher JNI)
 
 echo "Vendoring native sources: $SRC -> $DST"
 for d in "${SUBTREES[@]}"; do
@@ -48,4 +48,4 @@ for d in "${SUBTREES[@]}"; do
   echo "  vendored $d"
 done
 
-echo "Done. Verify with: ./gradlew assembleDebug"
+echo "Done. Verify with: ./gradlew assembleSideloadDebug"

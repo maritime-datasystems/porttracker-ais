@@ -16,8 +16,6 @@ include_directories(
     ${AIS_CATCHER_SRC}/libusb/libusb
     ${AIS_CATCHER_SRC}/libusb/libusb/os
     ${AIS_CATCHER_SRC}/rtl-sdr/include
-    ${AIS_CATCHER_SRC}/airspyone_host/libairspy/src
-    ${AIS_CATCHER_SRC}/airspyhf/libairspyhf/src
     ${AIS_CATCHER_SRC}/AIS-catcher/Source
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Application
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/IO
@@ -32,7 +30,7 @@ include_directories(
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Marine
 )
 
-add_definitions(-DHASRTLSDR -DHASRTLSDR_BIASTEE -DHASRTL_ANDROID -DHASAIRSPY -DHASAIRSPY_ANDROID -DHASAIRSPYHF -DHASAIRSPYHF_ANDROID -DHASRTLSDR_TUNERBW)
+add_definitions(-DHASRTLSDR -DHASRTLSDR_BIASTEE -DHASRTL_ANDROID -DHASRTLSDR_TUNERBW)
 
 # Define the native library
 add_library(
@@ -59,14 +57,7 @@ add_library(
     ${AIS_CATCHER_SRC}/rtl-sdr/src/tuner_fc2580.c
     ${AIS_CATCHER_SRC}/rtl-sdr/src/tuner_r82xx.c
     
-    # AirSpy (note: using airspyone_host, not airspy)
-    ${AIS_CATCHER_SRC}/airspyone_host/libairspy/src/airspy.c
-    ${AIS_CATCHER_SRC}/airspyone_host/libairspy/src/iqconverter_float.c
-    ${AIS_CATCHER_SRC}/airspyone_host/libairspy/src/iqconverter_int16.c
     
-    # AirSpy HF+
-    ${AIS_CATCHER_SRC}/airspyhf/libairspyhf/src/airspyhf.c
-    ${AIS_CATCHER_SRC}/airspyhf/libairspyhf/src/iqbalancer.c
     
     # AIS-catcher core (matching original CMakeLists.txt)
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Application/Receiver.cpp
@@ -75,7 +66,6 @@ add_library(
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Tracking/DB.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Tracking/Ships.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/DBMS/PostgreSQL.cpp
-    ${AIS_CATCHER_SRC}/AIS-catcher/Source/Device/AIRSPYHF.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Device/FileWAV.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Device/RTLSDR.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Device/SDRPLAY.cpp
@@ -104,7 +94,6 @@ add_library(
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/IO/HTTPServer.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/JSON/StringBuilder.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/JSON/Parser.cpp
-    ${AIS_CATCHER_SRC}/AIS-catcher/Source/Device/AIRSPY.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Device/Serial.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/Aviation/ADSB.cpp
     ${AIS_CATCHER_SRC}/AIS-catcher/Source/DSP/DSP.cpp

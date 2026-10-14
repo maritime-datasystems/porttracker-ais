@@ -13,7 +13,7 @@ Turn a compatible Android device and USB SDR receiver into an AIS receiving stat
 PortTracker AIS displays received vessel traffic on a map and provides a local web interface for station settings and diagnostics. Forward received AIS messages to compatible network applications using UDP or TCP, or configure MQTT output for your station.
 
 Features include:
-- USB SDR reception with supported RTL-SDR, AirSpy and AirSpy HF+ hardware.
+- USB SDR reception with supported RTL-SDR hardware.
 - Vessel map, receiver status, message stream and diagnostic information.
 - Configurable network output for compatible AIS applications.
 - Optional local vessel database and position history.
