@@ -1,8 +1,8 @@
 {
-  "version_code": 30,
-  "version_name": "3.0-0728-1118",
-  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v30/porttracker-ais.apk",
-  "apk_size": 29532076,
-  "release_notes": "The receiver now runs under the service type Android reserves for USB devices, so newer Android versions will not cap a 24/7 station's runtime. The web interface asks for a password out of the box (admin/admin - change it).",
+  "version_code": 31,
+  "version_name": "3.1.0",
+  "apk_url": "https://github.com/maritime-datasystems/porttracker-ais/releases/download/v31/porttracker-ais.apk",
+  "apk_size": 31044410,
+  "release_notes": "Stations recover on their own: the receiver restarts after dongle replugs and repeated restarts, MQTT retries until the broker is reachable and no longer drops messages, and Start/Stop receiver in the web interface works both ways. Android 16 support.",
   "min_version_code": 18
 }
