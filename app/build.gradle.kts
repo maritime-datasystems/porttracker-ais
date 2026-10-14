@@ -1,5 +1,4 @@
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -8,22 +7,49 @@ plugins {
 
 android {
     namespace = "com.porttracker.ais"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.porttracker.ais"
         minSdk = 23
-        targetSdk = 34
-        versionCode = 30
-        versionName = "3.0-${LocalDateTime.now().format(DateTimeFormatter.ofPattern("MMdd-HHmm"))}"
+        targetSdk = 36
+        versionCode = 31
+        versionName = "3.1.0"
 
-        ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("sideload") {
+            ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }
+            dimension = "distribution"
+            buildConfigField("boolean", "ALLOW_SIDELOAD_UPDATES", "true")
+        }
+        create("play") {
+            // The prebuilt x86_64 FRP executable has only 4 KB ELF alignment.
+            ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
+            dimension = "distribution"
+            buildConfigField("boolean", "ALLOW_SIDELOAD_UPDATES", "false")
         }
     }
 
+    // Optional local upload key; never use the debug certificate for Play.
+    val signingFile = rootProject.file("signing.properties")
+    if (signingFile.exists()) {
+        val signing = Properties().apply { signingFile.inputStream().use { load(it) } }
+        signingConfigs.create("upload") {
+            storeFile = rootProject.file(requireNotNull(signing.getProperty("storeFile")))
+            storePassword = requireNotNull(signing.getProperty("storePassword"))
+            keyAlias = requireNotNull(signing.getProperty("keyAlias"))
+            keyPassword = requireNotNull(signing.getProperty("keyPassword"))
+        }
+    }
+
+    packaging { jniLibs.useLegacyPackaging = true }
+
     buildTypes {
         release {
+            if (signingFile.exists()) signingConfig = signingConfigs.getByName("upload")
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -43,6 +69,7 @@ android {
     
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
     
     externalNativeBuild {
@@ -52,7 +79,7 @@ android {
         }
     }
     
-    ndkVersion = "25.1.8937393"
+    ndkVersion = "28.2.13676358"
 }
 
 dependencies {

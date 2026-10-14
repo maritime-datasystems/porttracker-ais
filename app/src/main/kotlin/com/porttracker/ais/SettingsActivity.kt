@@ -28,6 +28,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.preference.PreferenceManager
@@ -90,6 +91,20 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The WebView already provides the app header and navigation.
+        supportActionBar?.hide()
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (webView?.canGoBack() == true) {
+                    webView?.goBack()
+                } else {
+                    isEnabled = false
+                    try { onBackPressedDispatcher.onBackPressed() }
+                    finally { isEnabled = true }
+                }
+            }
+        })
 
         if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             WebView.setWebContentsDebuggingEnabled(true)
@@ -152,6 +167,14 @@ class SettingsActivity : AppCompatActivity() {
         webContainer = rootLayout
 
         setContentView(rootLayout)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
+            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+                androidx.core.view.WindowInsetsCompat.Type.displayCutout())
+            val keyboard = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime())
+            view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+            insets
+        }
+        androidx.core.view.ViewCompat.requestApplyInsets(rootLayout)
 
         // Register USB permission receiver
         val filter = IntentFilter(USB_PERMISSION_ACTION)
@@ -249,16 +272,6 @@ class SettingsActivity : AppCompatActivity() {
         webView?.destroy()
         webView = null
         super.onDestroy()
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (webView?.canGoBack() == true) {
-            webView?.goBack()
-        } else {
-            @Suppress("DEPRECATION")
-            super.onBackPressed()
-        }
     }
 
     private fun loadWebUI() {

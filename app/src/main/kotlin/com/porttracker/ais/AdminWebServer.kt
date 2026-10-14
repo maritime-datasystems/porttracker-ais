@@ -126,7 +126,9 @@ class AdminWebServer(
         
         if (session.uri == "/admin/api/config") {
             if (session.method == Method.GET) {
-                val json = configManager.getAllConfig()
+                val json = configManager.getAllConfig().apply {
+                    put("sideload_updates_available", BuildConfig.ALLOW_SIDELOAD_UPDATES)
+                }
                 return newFixedLengthResponse(Response.Status.OK, "application/json", json.toString())
             } else if (session.method == Method.POST) {
                 try {
@@ -269,6 +271,12 @@ class AdminWebServer(
         // FRP restart — restart FRP tunnel with current preferences
         if (session.method == Method.POST && session.uri == "/admin/api/frp/restart") {
             return handleFrpRestart()
+        }
+
+        // Play updates are distributed exclusively by Google Play.
+        if (!BuildConfig.ALLOW_SIDELOAD_UPDATES && session.uri.startsWith("/admin/api/update/")) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json",
+                """{"error":"Updates are managed by Google Play"}""")
         }
 
         // --- OTA Update Endpoints ---

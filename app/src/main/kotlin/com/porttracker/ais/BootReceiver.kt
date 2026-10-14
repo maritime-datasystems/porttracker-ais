@@ -38,6 +38,11 @@ class BootReceiver : BroadcastReceiver() {
             // Scan for SDR device with cached permission
             val deviceInfo = UsbDeviceScanner.scanForDevices(context)
             
+            // Android 15+ disallows starting a dataSync service from boot.
+            if (android.os.Build.VERSION.SDK_INT >= 35 && !deviceInfo.isUsable) {
+                Log.i(TAG, "Open the app to start web-only mode or grant USB permission")
+                return
+            }
             val serviceIntent = Intent(context, AisReceiverService::class.java)
             
             if (deviceInfo.found && deviceInfo.isUsable) {
@@ -67,7 +72,11 @@ class BootReceiver : BroadcastReceiver() {
                 Log.i(TAG, "No SDR device, starting in web-only mode")
             }
             
-            ContextCompat.startForegroundService(context, serviceIntent)
+            try {
+                ContextCompat.startForegroundService(context, serviceIntent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Boot start is not currently allowed; open the app to start", e)
+            }
         }
     }
     

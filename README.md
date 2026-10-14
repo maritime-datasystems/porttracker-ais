@@ -23,7 +23,7 @@ Full component/threading/API documentation: **[docs/ARCHITECTURE.md](docs/ARCHIT
 
 - Android 6.0+ (API 23+)
 - USB OTG support (for USB SDR devices)
-- Android SDK 34, NDK 25.1.8937393, CMake 3.22.1 (managed by the Gradle build)
+- Android SDK 36, NDK 28.2.13676358, CMake 3.22.1 (managed by the Gradle build)
 
 ## Building
 
@@ -33,7 +33,7 @@ checkout is required.
 
 ```bash
 # Build (native sources are already in-tree)
-./gradlew assembleDebug
+./gradlew assembleSideloadDebug
 ```
 
 The vendored native sources originate from
@@ -107,3 +107,7 @@ Access `http://<phone-ip>:8080` from any browser when the service is running.
 
 Uses native code from AIS-catcher (Copyright 2021-2024 jvde.github@gmail.com). 
 See the original project for license details.
+
+## Google Play distribution
+
+See [Google Play upload preparation](docs/google-play/UPLOAD.md) for Play/sideload build variants, upload signing, internal testing, and remaining release requirements.

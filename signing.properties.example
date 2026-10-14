@@ -1,0 +1,6 @@
+# Copy to signing.properties (gitignored), restrict permissions to your account.
+# Use the existing upload key if this package already exists in Play Console.
+storeFile=/absolute/path/to/porttracker-upload.jks
+storePassword=REPLACE_LOCALLY
+keyAlias=upload
+keyPassword=REPLACE_LOCALLY

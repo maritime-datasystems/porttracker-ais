@@ -922,6 +922,7 @@ var SettingsRenderer = {
                 </div>
             </div>
 
+            ${this.bool('sideload_updates_available', false) ? `
             <!-- OTA Update Section -->
             <div class="card mt-4">
                 <div class="card-header"><i class="bi bi-cloud-download"></i> Software Update</div>
@@ -945,6 +946,7 @@ var SettingsRenderer = {
                     </div>
                 </div>
             </div>
+            ` : '<div class="alert alert-info mt-4">App updates are managed by Google Play.</div>'}
         `;
     },
 

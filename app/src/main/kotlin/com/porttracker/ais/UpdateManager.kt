@@ -114,6 +114,7 @@ class UpdateManager(private val context: Context) {
      * Runs on calling thread (call from background!).
      */
     fun checkForUpdate(): UpdateInfo {
+        check(BuildConfig.ALLOW_SIDELOAD_UPDATES) { "Updates are managed by Google Play" }
         isChecking = true
         lastError = null
         val manifestUrl = getManifestUrl()
@@ -196,6 +197,7 @@ class UpdateManager(private val context: Context) {
      * Returns true if install intent was launched successfully.
      */
     fun downloadAndInstall(): Boolean {
+        check(BuildConfig.ALLOW_SIDELOAD_UPDATES) { "Updates are managed by Google Play" }
         val info = lastCheckResult
             ?: throw IllegalStateException("Call checkForUpdate() first")
         val apkUrl = info.apkDownloadUrl

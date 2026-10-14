@@ -24,3 +24,9 @@ Thumbs.db
 # Fetch with scripts/fetch-frpc.sh before building remote access. See README.
 app/src/main/jniLibs/*/libfrpc.so
 screens/
+
+# Release credentials and generated bundles
+signing.properties
+*.jks
+*.keystore
+*.aab

@@ -88,6 +88,7 @@ class AisReceiverService : Service() {
     @Volatile private var lastNotificationText: String? = null
     private var receiverThread: Thread? = null
     private val shouldStop = AtomicBoolean(false)
+    private var foregroundTimedOut = false
     private val restartRequested = AtomicBoolean(false)
     private var fileDescriptor: Int = -1
     private var currentSource: Int = 0
@@ -155,7 +156,10 @@ class AisReceiverService : Service() {
         // Enter foreground FIRST — after startForegroundService() Android kills
         // the process unless startForeground() is called promptly, and the USB
         // scan below can be slow. Re-posting when already running is harmless.
-        startForegroundWithNotification(lastNotificationText ?: "Starting AIS Receiver...")
+        if (!startForegroundWithNotification(lastNotificationText ?: "Starting AIS Receiver...")) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         synchronized(startLock) {
             // Check if service is already running
@@ -691,6 +695,15 @@ class AisReceiverService : Service() {
         }
     }
 
+    @android.annotation.TargetApi(35)
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "Foreground service time limit reached; stopping until the user reopens the app")
+        foregroundTimedOut = true
+        shouldStop.set(true)
+        receiverThread?.interrupt()
+        stopSelf()
+    }
+
     override fun onDestroy() {
         Log.i(TAG, "Service stopping...")
         
@@ -704,7 +717,7 @@ class AisReceiverService : Service() {
         receiverThread?.let {
             it.interrupt()
             try {
-                it.join(5000)
+                it.join(if (foregroundTimedOut) 500 else 5000)
             } catch (e: InterruptedException) {
                 Log.w(TAG, "Interrupted waiting for receiver thread")
             }
@@ -823,11 +836,11 @@ class AisReceiverService : Service() {
      * makes startForeground throw SecurityException, and a service that cannot
      * enter the foreground is a station that is simply gone.
      */
-    private fun startForegroundWithNotification(text: String) {
+    private fun startForegroundWithNotification(text: String): Boolean {
         val notification = createNotification(text)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification)
-            return
+            return true
         }
 
         var primary = if (hasUsbDeviceAttached()) {
@@ -842,22 +855,18 @@ class AisReceiverService : Service() {
         // Fall back through progressively weaker claims rather than die.
         val attempts = listOf(
             primary,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-            0,
+            primary and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION.inv(),
         )
         for (type in attempts) {
             try {
-                if (type == 0) {
-                    startForeground(NOTIFICATION_ID, notification)
-                } else {
-                    startForeground(NOTIFICATION_ID, notification, type)
-                }
-                return
+                startForeground(NOTIFICATION_ID, notification, type)
+                return true
             } catch (e: Exception) {
                 Log.w(TAG, "startForeground rejected service type $type: ${e.message}")
             }
         }
         Log.e(TAG, "Could not enter the foreground under any service type.")
+        return false
     }
 
     /** A supported USB device with permission satisfies the connectedDevice prerequisite. */
