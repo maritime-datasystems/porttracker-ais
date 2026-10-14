@@ -1,0 +1,1 @@
+Turn an Android phone and a USB SDR into an AIS station for vessel tracking.

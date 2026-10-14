@@ -1,0 +1,30 @@
+PortTracker AIS turns an Android phone or tablet and a USB SDR dongle into an AIS receiving station. It decodes the signals ships broadcast on the AIS channels (161.975 and 162.025 MHz) and shows the vessels around you on a map, right on the device.
+
+Built for unattended operation: the receiver runs as a background service, starts again after a reboot, picks the dongle up again when it is plugged back in, and can be managed from any browser on your network.
+
+WHAT YOU NEED
+• An Android device with USB host (OTG) support
+• An RTL-SDR USB dongle (RTL2832U based, e.g. RTL-SDR Blog V3 or Nooelec NESDR)
+• A VHF antenna for 162 MHz, mounted as high and clear as possible
+The phone on its own cannot receive AIS: radio reception needs the dongle and antenna.
+
+FEATURES
+• Live vessel map with names, types, positions, courses and speeds
+• Receiver status, message rates and a built-in "Doctor" that checks USB, permissions, battery optimisation and network, with one-tap fixes
+• Web interface on your local network: monitor and configure the station from a laptop, password protected
+• Outputs for your own tools: NMEA 0183 over UDP and TCP, MQTT, and NMEA 2000 emulation (Yacht Devices RAW / SeaSmart) for chartplotters and navigation apps such as OpenCPN
+• Optional phone GPS as own-ship position (RMC/GGA/HDT) on the NMEA output
+• Optional local vessel database and position history
+
+SHARE YOUR STATION (OPTIONAL)
+Sign in with a free PortTracker account (the same login works for TrustedDocks) to share your station's data. Your station is registered automatically, with no keys to copy, and you can follow its reception, range and the vessels it hears on porttracker.co. One account can run any number of stations. Everything else works without an account.
+
+GOOD TO KNOW
+• Range depends on the antenna, its height and local conditions.
+• Map tiles and online features need an internet connection; reception and local outputs do not.
+• AIS data can be incomplete or delayed. Do not use this app as your only source of navigation information.
+
+The AIS decoder is based on the open-source AIS-catcher project by jvde-github (GPLv3). Source code: https://github.com/maritime-datasystems/porttracker-ais
+
+Privacy policy: https://www.porttracker.co/ais-app/privacy
+Support: support@porttracker.co
