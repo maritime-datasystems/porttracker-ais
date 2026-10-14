@@ -127,7 +127,10 @@ class AisReceiverService : Service() {
     private fun extractWebAssets() {
         val webDir = java.io.File(filesDir, "web")
         val versionFile = java.io.File(webDir, ".version")
-        val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName
+        // Install time, not just versionName: a rebuilt APK with the same
+        // version would otherwise keep serving the previous web UI.
+        val info = packageManager.getPackageInfo(packageName, 0)
+        val currentVersion = "${info.versionName}-${info.lastUpdateTime}"
 
         if (versionFile.exists() && versionFile.readText() == currentVersion) {
             return  // Assets already extracted for this version

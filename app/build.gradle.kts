@@ -29,6 +29,11 @@ android {
             // The prebuilt x86_64 FRP executable has only 4 KB ELF alignment.
             ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
             dimension = "distribution"
+            // Separate store identity (porttracker.co, reversed). The fleet's
+            // sideload installs stay com.porttracker.ais, so both can coexist
+            // and nobody has to uninstall (and lose station settings) to try
+            // the store build. Permanent once uploaded to Play.
+            applicationId = "co.porttracker.ais"
             buildConfigField("boolean", "ALLOW_SIDELOAD_UPDATES", "false")
         }
     }

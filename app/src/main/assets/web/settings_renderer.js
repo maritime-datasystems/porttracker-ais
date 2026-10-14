@@ -725,6 +725,14 @@ var SettingsRenderer = {
                 </div>
             </div>
 
+            <!-- Required by Google Play for apps that let people create an account -->
+            <p class="text-muted mb-3" style="font-size:0.85em">
+                <i class="bi bi-shield-check"></i>
+                <a href="https://www.porttracker.co/ais-app/privacy" target="_blank">Privacy policy</a>
+                &nbsp;·&nbsp;
+                <a href="https://www.porttracker.co/account-deletion" target="_blank">Delete account</a>
+            </p>
+
             <!-- Quick Setup via Paste Config -->
             <div class="card mb-3">
                 <div class="card-body">
