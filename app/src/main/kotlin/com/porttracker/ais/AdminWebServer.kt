@@ -175,8 +175,9 @@ class AdminWebServer(
         // Service control endpoints
         if (session.method == Method.POST && session.uri == "/admin/api/service/start") {
             try {
-                val intent = android.content.Intent(service, AisReceiverService::class.java)
-                androidx.core.content.ContextCompat.startForegroundService(service, intent)
+                // The admin server runs inside the service, so the service is
+                // up; what "start" means is switching the receiver back on.
+                service.startReceiver()
                 return newFixedLengthResponse(Response.Status.OK, "application/json", """{"success":true}""")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start service", e)
@@ -188,14 +189,7 @@ class AdminWebServer(
         if (session.method == Method.POST && session.uri == "/admin/api/service/stop") {
             try {
                 // Only stop the SDR engine, NOT the whole service — web server must stay alive
-                Thread {
-                    try {
-                        AisReceiverService.hasDevice = false
-                        com.jvdegithub.aiscatcher.AisCatcherJava.forceStop()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error stopping SDR engine", e)
-                    }
-                }.start()
+                service.stopReceiver()
                 return newFixedLengthResponse(Response.Status.OK, "application/json", """{"success":true}""")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to stop service", e)

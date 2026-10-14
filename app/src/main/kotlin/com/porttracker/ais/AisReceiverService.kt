@@ -90,16 +90,27 @@ class AisReceiverService : Service() {
     private val shouldStop = AtomicBoolean(false)
     private var foregroundTimedOut = false
     private val restartRequested = AtomicBoolean(false)
-    private var fileDescriptor: Int = -1
+    // Receiver switched off from the web UI: the service and web UI keep
+    // running, the engine runs web-only until it is switched back on.
+    @Volatile private var receiverPaused = false
     private var currentSource: Int = 0
     private var gpsForwarder: GpsForwarder? = null
     private var nmeaOutputServer: NmeaOutputServer? = null
     private var frpTunnelManager: FrpTunnelManager? = null
-    private var adminWebServer: AdminWebServer? = null
+    @Volatile private var adminWebServer: AdminWebServer? = null
+    // Only touched on mqttExecutor
     private var mqttPublisher: MqttPublisher? = null
     private var mqttNmeaListener: NMEAListener? = null
+    // Serializes MQTT setup and teardown: a config save, a finished sign-in
+    // and onDestroy can all ask at once, and two overlapping starts used to
+    // leave an orphaned publisher still registered as a listener.
+    private val mqttExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "MQTT-Lifecycle").apply { isDaemon = true }
+    }
     private var vesselCacheWriter: VesselCacheWriter? = null
     private val startLock = Object()  // Prevent concurrent starts
+    // Wakes the receiver thread for restart/stop requests (see awaitSignal)
+    private val loopSignal = Object()
     // Dynamic USB receiver for detecting SDR plug/unplug while service is running
     private var usbReceiver: android.content.BroadcastReceiver? = null
     
@@ -164,21 +175,14 @@ class AisReceiverService : Service() {
         synchronized(startLock) {
             // Check if service is already running
             if (isRunning && receiverThread?.isAlive == true) {
-                // If we're in web-only mode and a USB device is now available, trigger engine restart
+                // A dongle that turns up while we run web-only (UsbDeviceReceiver
+                // re-fires onStartCommand) gets picked up by an engine restart.
                 val newVid = intent?.getIntExtra("USB_VENDOR_ID", -1) ?: -1
                 val newPid = intent?.getIntExtra("USB_PRODUCT_ID", -1) ?: -1
                 if (!hasDevice && newVid > 0 && newPid > 0) {
                     Log.i(TAG, "USB device available while in web-only mode (vid=$newVid, pid=$newPid) — triggering restart")
-                    val newFd = openUsbDevice(newVid, newPid)
-                    if (newFd >= 0) {
-                        fileDescriptor = newFd
-                        currentSource = intent?.getIntExtra("SOURCE", currentSource) ?: currentSource
-                        restartRequested.set(true)
-                        shouldStop.set(true)
-                        receiverThread?.interrupt()  // Break out of keep-alive sleep loop
-                    } else {
-                        Log.w(TAG, "USB device found but could not open (permission issue?)")
-                    }
+                    currentSource = intent?.getIntExtra("SOURCE", currentSource) ?: currentSource
+                    requestEngineRestart()
                     return START_STICKY
                 }
                 Log.w(TAG, "Service already running, ignoring start command")
@@ -191,38 +195,18 @@ class AisReceiverService : Service() {
         val config = loadConfig()
         currentSource = intent?.getIntExtra("SOURCE", config.deviceType.sourceId) ?: config.deviceType.sourceId
 
-
-        // Open USB device - try intent first, then scan for SDR
-        var vendorId = intent?.getIntExtra("USB_VENDOR_ID", -1) ?: -1
-        var productId = intent?.getIntExtra("USB_PRODUCT_ID", -1) ?: -1
-
-        // Fallback: scan for SDR device if not specified in intent
-        // (also the path taken on a STICKY restart, where intent is null)
-        if (vendorId <= 0 || productId <= 0) {
-            Log.i(TAG, "No USB IDs in intent, scanning for SDR device...")
-            val deviceInfo = UsbDeviceScanner.scanForDevices(this)
-            if (deviceInfo.found && deviceInfo.isUsable) {
-                vendorId = deviceInfo.vendorId
-                productId = deviceInfo.productId
-                Log.i(TAG, "Found SDR via scan: vendor=$vendorId, product=$productId")
-            }
-        }
-
-        fileDescriptor = if (vendorId > 0 && productId > 0) {
-            openUsbDevice(vendorId, productId)
-        } else {
-            -1
-        }
-
-        Log.i(TAG, "USB fd=$fileDescriptor (vendor=$vendorId, product=$productId)")
+        // The USB device itself is opened by the receiver thread on every
+        // engine cycle (see runServiceLoop) — that thread is the only owner
+        // of the connection the native engine reads from.
 
         // Acquire wake lock
         acquireWakeLock()
-        
+
         // Start receiver in background thread
         shouldStop.set(false)
+        restartRequested.set(false)
         receiverThread = Thread {
-            runServiceLoop(config)
+            runServiceLoop()
         }.apply {
             name = "AIS-Receiver-Thread"
             start()
@@ -269,8 +253,19 @@ class AisReceiverService : Service() {
         return START_STICKY
     }
     
+    // Only touched from the receiver thread (and from onDestroy once that
+    // thread is gone): the native engine reads from this connection's fd.
     private var usbConnection: android.hardware.usb.UsbDeviceConnection? = null
-    
+
+    private fun closeUsbConnection() {
+        try {
+            usbConnection?.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error closing USB connection", e)
+        }
+        usbConnection = null
+    }
+
     private fun openUsbDevice(vendorId: Int, productId: Int): Int {
         try {
             // Close previous connection if any
@@ -373,18 +368,21 @@ class AisReceiverService : Service() {
     }
 
     /**
-     * Re-scan USB devices and open the SDR file descriptor.
-     * Used when restarting the engine after the SDR was plugged in post-launch.
+     * Scan USB devices and open a fresh file descriptor for the SDR.
+     *
+     * Called at the start of every engine cycle, after the previous engine
+     * was closed. Never reuse an fd from an earlier cycle: after an unplug it
+     * points at a dead connection, and handing that to the native engine
+     * crashes it.
      */
     private fun rescanAndOpenUsb(): Int {
+        closeUsbConnection()
         val deviceInfo = UsbDeviceScanner.scanForDevices(this)
         if (deviceInfo.found && deviceInfo.isUsable) {
             Log.i(TAG, "rescanAndOpenUsb: Found SDR vendor=${deviceInfo.vendorId}, product=${deviceInfo.productId}")
-            val fd = openUsbDevice(deviceInfo.vendorId, deviceInfo.productId)
-            fileDescriptor = fd
-            return fd
+            return openUsbDevice(deviceInfo.vendorId, deviceInfo.productId)
         }
-        Log.w(TAG, "rescanAndOpenUsb: No usable SDR device found")
+        Log.i(TAG, "rescanAndOpenUsb: No usable SDR device found")
         return -1
     }
 
@@ -411,13 +409,7 @@ class AisReceiverService : Service() {
                                     val usbManager = getSystemService(USB_SERVICE) as android.hardware.usb.UsbManager
                                     if (usbManager.hasPermission(it)) {
                                         Log.i(TAG, "Device has permission, restarting engine...")
-                                        val fd = openUsbDevice(it.vendorId, it.productId)
-                                        if (fd >= 0) {
-                                            fileDescriptor = fd
-                                            restartRequested.set(true)
-                                            shouldStop.set(true)
-                                            receiverThread?.interrupt()
-                                        }
+                                        requestEngineRestart()
                                     } else {
                                         Log.i(TAG, "Device needs permission — requesting...")
                                         val permIntent = android.app.PendingIntent.getBroadcast(
@@ -458,13 +450,7 @@ class AisReceiverService : Service() {
                         if (granted && device != null) {
                             Log.i(TAG, "USB permission granted in service for ${device.productName}")
                             if (!hasDevice) {
-                                val fd = openUsbDevice(device.vendorId, device.productId)
-                                if (fd >= 0) {
-                                    fileDescriptor = fd
-                                    restartRequested.set(true)
-                                    shouldStop.set(true)
-                                    receiverThread?.interrupt()
-                                }
+                                requestEngineRestart()
                             }
                         } else {
                             Log.w(TAG, "USB permission denied in service")
@@ -487,107 +473,200 @@ class AisReceiverService : Service() {
 
     fun triggerEngineRestart() {
         Log.i(TAG, "Triggering engine restart via Admin API...")
-        restartRequested.set(true)
-        // Run on background thread to avoid blocking the HTTP response
-        // and give native engine time to wind down before Close() is called
-        Thread {
-            try {
-                Thread.sleep(500) // Let HTTP response flush first
-                AisCatcherJava.forceStop()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error forcing stop for restart", e)
-            }
-        }.start()
+        requestEngineRestart()
     }
 
-    private fun runServiceLoop(config: ServiceConfig) {
-        Log.i(TAG, "Service Loop Started")
-        
+    /**
+     * Ask the receiver thread to tear the engine down and run a fresh cycle
+     * (re-read config, re-scan USB). Safe from any thread, never blocks.
+     *
+     * The Kotlin flag covers a request that lands before the next InitNative;
+     * the native stop covers one that lands while Run() is (about to be)
+     * blocking — InitNative resets it, so it can never leak into a later cycle.
+     */
+    private fun requestEngineRestart() {
+        restartRequested.set(true)
+        stopNativeEngine()
+        signalLoop()
+    }
+
+    /** Web UI "stop": keep the service and web UI up, release the SDR. */
+    fun stopReceiver() {
+        Log.i(TAG, "Receiver stop requested via Admin API")
+        receiverPaused = true
+        stopNativeEngine()
+        signalLoop()
+    }
+
+    /** Web UI "start": undo stopReceiver and pick the SDR up again. */
+    fun startReceiver() {
+        Log.i(TAG, "Receiver start requested via Admin API")
+        receiverPaused = false
+        requestEngineRestart()
+    }
+
+    /** Ask the receiver thread to finish for good. Safe from any thread. */
+    private fun requestServiceStop() {
+        shouldStop.set(true)
+        stopNativeEngine()
+        signalLoop()
+    }
+
+    private fun stopNativeEngine() {
+        if (!AisCatcherJava.isLibraryLoaded) return
         try {
-            // Only run ONCE per process - no retry loop for native engine
-            // If the native engine crashes/disconnects, we restart the whole service
-            serviceLock.lock()
-            try {
-                restartRequested.set(false)
-                
-                // Manage Admin Web Server
-                if (config.webViewerEnabled) {
-                     if (adminWebServer == null) {
-                         Log.i(TAG, "Starting Admin Web Server on port ${config.webViewerPort}...")
-                         adminWebServer = AdminWebServer(this, config.webViewerPort, INTERNAL_WEB_PORT)
-                         adminWebServer?.start()
-                     }
-                } else {
-                    adminWebServer?.stop()
-                    adminWebServer = null
+            AisCatcherJava.forceStop()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error requesting native stop", e)
+        }
+    }
+
+    private fun signalLoop() {
+        synchronized(loopSignal) { loopSignal.notifyAll() }
+    }
+
+    /**
+     * Wait until a restart or stop is requested, or the timeout passes
+     * (0 = no timeout). Monitor wait instead of sleep + interrupt: an
+     * interrupt aimed at a sleep can just as well land in native teardown.
+     */
+    private fun awaitSignal(timeoutMs: Long) {
+        val deadline = if (timeoutMs > 0) System.currentTimeMillis() + timeoutMs else Long.MAX_VALUE
+        synchronized(loopSignal) {
+            while (!shouldStop.get() && !restartRequested.get()) {
+                val left = deadline - System.currentTimeMillis()
+                if (left <= 0) return
+                try {
+                    loopSignal.wait(if (timeoutMs > 0) left else 0)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return
                 }
-                
-                Log.i(TAG, "Starting Native Engine...")
+            }
+        }
+    }
+
+    /**
+     * The receiver thread: one engine cycle after another until the service
+     * is told to stop.
+     *
+     * Every cycle re-reads the config and re-scans USB, so a restart from the
+     * web UI, a dongle being plugged in and a dongle coming back after an
+     * unplug all take the same path. This used to be a first run plus at most
+     * one or two hand-written reruns: a station that lost its dongle twice, or
+     * got two restart requests, ended up permanently web-only.
+     */
+    private fun runServiceLoop() {
+        Log.i(TAG, "Service Loop Started")
+        // Static lock: a service instance created while an old one is still
+        // winding down waits here instead of running a second native engine.
+        serviceLock.lock()
+        try {
+            var failedQuickly = 0
+            while (!shouldStop.get()) {
+                restartRequested.set(false)
+                val config = ServiceConfig.fromPreferences(this)
+                manageAdminWebServer(config)
+
                 isRunning = true
-                runNativeEngine(config, currentSource, fileDescriptor)
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in Service Loop", e)
-            } finally {
-                serviceLock.unlock()
-            }
-            
-            // Engine exited - decide what to do
-            if (restartRequested.get()) {
-                Log.i(TAG, "Engine restart requested — restarting in-process")
-                Thread.sleep(2000)
-                shouldStop.set(false)
-                val newConfig = ServiceConfig.fromPreferences(this)
-                restartRequested.set(false)
-                // Use existing fd if set by USB receiver, otherwise re-scan
-                val newFd = if (fileDescriptor >= 0) fileDescriptor else rescanAndOpenUsb()
-                Log.i(TAG, "Re-running engine with updated config... (fd=$newFd)")
-                runNativeEngine(newConfig, currentSource, newFd)
-            }
-            
-            if (shouldStop.get()) {
-                Log.i(TAG, "Service loop exiting (stopped by user)")
-                return
-            }
-            
-            // Unexpected exit (USB disconnect, crash, etc.)
-            if (!shouldStop.get() && !restartRequested.get()) {
-                Log.w(TAG, "Engine exited unexpectedly. Entering web-only keep-alive...")
-                updateNotification("SDR disconnected — Web server running")
-                // Stay alive for web server instead of killing the process
-                while (!shouldStop.get() && !restartRequested.get()) {
-                    try {
-                        Thread.sleep(1000)
-                    } catch (e: InterruptedException) {
-                        break
-                    }
+                val fd = if (receiverPaused) {
+                    closeUsbConnection()
+                    -1
+                } else {
+                    rescanAndOpenUsb()
                 }
+                Log.i(TAG, "Engine cycle starting (source=$currentSource, fd=$fd)")
+                val started = System.currentTimeMillis()
+                val ranReceiver = try {
+                    runNativeEngine(config, currentSource, fd)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Engine cycle failed", t)
+                    false
+                }
+                // Engine is closed: the fd is no longer in use.
+                closeUsbConnection()
+
+                if (shouldStop.get()) break
                 if (restartRequested.get()) {
-                    Log.i(TAG, "Restart requested during keep-alive, re-scanning USB and re-running engine...")
-                    Thread.sleep(1000)
-                    shouldStop.set(false)
-                    val newConfig = ServiceConfig.fromPreferences(this)
-                    restartRequested.set(false)
-                    val newFd = if (fileDescriptor >= 0) fileDescriptor else rescanAndOpenUsb()
-                    Log.i(TAG, "Re-running engine with fd=$newFd")
-                    runNativeEngine(newConfig, currentSource, newFd)
+                    failedQuickly = 0
+                    pauseBeforeReopen()
+                    continue
                 }
+
+                // Switched off from the web UI: stay web-only until switched
+                // back on (startReceiver sets restartRequested).
+                if (receiverPaused) {
+                    if (!ranReceiver) awaitSignal(0)
+                    continue
+                }
+
+                // The engine ended on its own: dongle unplugged, native error,
+                // or no receiver and no web UI to keep alive.
+                if (ranReceiver) {
+                    Log.w(TAG, "Engine exited unexpectedly — waiting for the SDR to come back")
+                    updateNotification("SDR disconnected — Web server running")
+                }
+                // Back off when the engine keeps dying right after start, so a
+                // half-broken dongle cannot spin the CPU. USB attach and
+                // restart requests still cut the wait short.
+                failedQuickly = if (System.currentTimeMillis() - started < 10_000) failedQuickly + 1 else 0
+                val waitMs = when {
+                    !ranReceiver && !config.webViewerEnabled -> 0L  // nothing to do until an event
+                    else -> (5_000L shl minOf(failedQuickly, 5)).coerceAtMost(120_000L)
+                }
+                awaitSignal(waitMs)
             }
-            
         } finally {
+            closeUsbConnection()
+            if (shouldStop.get()) {
+                // onDestroy stops it too; this covers a server this thread
+                // created while onDestroy was already past that point.
+                adminWebServer?.stop()
+                adminWebServer = null
+            }
             isRunning = false
+            hasDevice = false
+            serviceLock.unlock()
             Log.i(TAG, "Service Loop Ended")
         }
     }
+
+    /** Give the USB stack a moment after a restart request before re-opening. */
+    private fun pauseBeforeReopen() {
+        try {
+            Thread.sleep(1000)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    private fun manageAdminWebServer(config: ServiceConfig) {
+        if (config.webViewerEnabled) {
+            if (adminWebServer == null) {
+                Log.i(TAG, "Starting Admin Web Server on port ${config.webViewerPort}...")
+                adminWebServer = AdminWebServer(this, config.webViewerPort, INTERNAL_WEB_PORT)
+                adminWebServer?.start()
+            }
+        } else {
+            adminWebServer?.stop()
+            adminWebServer = null
+        }
+    }
     
-    private fun runNativeEngine(config: ServiceConfig, source: Int, fd: Int) {
+    /**
+     * One engine cycle. Returns true when a receiver was created and ran
+     * (whether it then stopped on request or because the dongle went away),
+     * false when there was no receiver to run.
+     */
+    private fun runNativeEngine(config: ServiceConfig, source: Int, fd: Int): Boolean {
+        var ranReceiver = false
         try {
             if (!AisCatcherJava.isLibraryLoaded) {
                 val error = "Native library not loaded - cannot start receiver"
                 Log.e(TAG, error)
                 updateNotification(error)
                 onError(error)
-                return
+                return false
             }
 
             Log.i(TAG, "Initializing native library...")
@@ -643,6 +722,7 @@ class AisReceiverService : Service() {
             }
             
             if (result == 0) {
+                ranReceiver = true
                 hasDevice = true
                 val statusMsg = if (config.webViewerEnabled) {
                     "AIS Receiver running (Web: port ${config.webViewerPort})"
@@ -650,26 +730,27 @@ class AisReceiverService : Service() {
                     "AIS Receiver running"
                 }
                 updateNotification(statusMsg)
-                Log.i(TAG, "Running receiver...")
-                AisCatcherJava.Run() // This blocks until stopped
-                Log.i(TAG, "Receiver stopped")
+                // A request that arrived before InitNative reset the native
+                // stop flag is only visible here; skip Run() rather than
+                // block in it until the next request.
+                if (!shouldStop.get() && !restartRequested.get()) {
+                    Log.i(TAG, "Running receiver...")
+                    AisCatcherJava.Run() // This blocks until stopped
+                    Log.i(TAG, "Receiver stopped")
+                }
             } else {
                 hasDevice = false
                 if (config.webViewerEnabled) {
                     Log.w(TAG, "No SDR device available (result=$result), web interface running")
-                    updateNotification("No SDR device - Web only (port ${config.webViewerPort})")
+                    updateNotification(
+                        if (receiverPaused) "Receiver stopped - Web only (port ${config.webViewerPort})"
+                        else "No SDR device - Web only (port ${config.webViewerPort})")
                     
                     // Web server was already created by createWebViewer() and runs on its own thread
                     // Do NOT call Run() here - it crashes (SIGSEGV) without a valid SDR device
                     // Just keep the service alive so the web server can continue serving
                     Log.i(TAG, "Starting in web-only mode (keep-alive loop)...")
-                    while (!shouldStop.get() && !restartRequested.get()) {
-                        try {
-                            Thread.sleep(1000)
-                        } catch (e: InterruptedException) {
-                            break
-                        }
-                    }
+                    awaitSignal(0)
                     Log.i(TAG, "Web-only mode stopped")
                 } else {
                     Log.e(TAG, "No SDR device available and web interface disabled - stopping service")
@@ -691,36 +772,37 @@ class AisReceiverService : Service() {
                     Log.e(TAG, "Error closing receiver", e)
                 }
             }
-            // isRunning = false  <- MOVED to runServiceLoop
+            hasDevice = false
         }
+        return ranReceiver
     }
 
     @android.annotation.TargetApi(35)
     override fun onTimeout(startId: Int, fgsType: Int) {
         Log.w(TAG, "Foreground service time limit reached; stopping until the user reopens the app")
         foregroundTimedOut = true
-        shouldStop.set(true)
-        receiverThread?.interrupt()
+        requestServiceStop()
         stopSelf()
     }
 
     override fun onDestroy() {
         Log.i(TAG, "Service stopping...")
         
-        shouldStop.set(true)
-        try {
-            AisCatcherJava.forceStop()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping receiver", e)
-        }
-        
-        receiverThread?.let {
-            it.interrupt()
+        requestServiceStop()
+
+        // Short wait only: this is the main thread. If native teardown takes
+        // longer, the receiver thread finishes it (and closes the USB
+        // connection) on its own; a new service instance waits on serviceLock.
+        val receiverStillRunning = receiverThread?.let {
             try {
-                it.join(if (foregroundTimedOut) 500 else 5000)
+                it.join(if (foregroundTimedOut) 500 else 1500)
             } catch (e: InterruptedException) {
                 Log.w(TAG, "Interrupted waiting for receiver thread")
             }
+            it.isAlive
+        } ?: false
+        if (receiverStillRunning) {
+            Log.w(TAG, "Receiver thread still winding down; it will release USB itself")
         }
         
         // Stop GPS forwarding
@@ -743,16 +825,10 @@ class AisReceiverService : Service() {
             Log.w(TAG, "Error stopping FRP tunnel", e)
         }
         
-        // Stop MQTT publisher
-        try {
-            mqttNmeaListener?.let { removeNMEAListener(it) }
-            mqttNmeaListener = null
-            mqttPublisher?.stop()
-            mqttPublisher = null
-            Log.i(TAG, "MQTT publisher stopped")
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping MQTT publisher", e)
-        }
+        // Stop MQTT publisher — off the main thread (a clean disconnect waits
+        // for the broker); shutdown() still runs the queued stop.
+        stopMqttPublisher()
+        mqttExecutor.shutdown()
         
         // Stop vessel DB writer
         try {
@@ -770,13 +846,10 @@ class AisReceiverService : Service() {
             Log.w(TAG, "Error stopping Admin Web Server", e)
         }
         
-        // Close USB connection to release device for re-enumeration
-        try {
-            usbConnection?.close()
-            usbConnection = null
-            Log.i(TAG, "USB connection closed")
-        } catch (e: Exception) {
-            Log.w(TAG, "Error closing USB connection", e)
+        // The receiver thread owns the USB connection; only release it here
+        // when that thread is already gone.
+        if (!receiverStillRunning) {
+            closeUsbConnection()
         }
         
         // Unregister USB receiver
@@ -788,8 +861,10 @@ class AisReceiverService : Service() {
         }
 
         releaseWakeLock()
-        isRunning = false
-        hasDevice = false
+        if (!receiverStillRunning) {
+            isRunning = false
+            hasDevice = false
+        }
         
         super.onDestroy()
     }
@@ -941,104 +1016,116 @@ class AisReceiverService : Service() {
         Log.i(TAG, "Wake lock and WiFi lock released")
     }
     /**
-     * Start the MQTT publisher on a background thread.
-     * Reads credentials directly from config (saved via settings web UI).
+     * (Re)start the MQTT publisher. Runs on mqttExecutor, after any stop
+     * queued before it. Reads credentials directly from prefs (saved via
+     * settings web UI).
      */
-    private fun startMqttPublisher() {
-        Thread({
-            try {
-                val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
-                val brokerUrl = prefs.getString("mqtt_broker_url", "") ?: ""
-                val username = prefs.getString("mqtt_username", "") ?: ""
-                val password = prefs.getString("mqtt_password", "") ?: ""
-                var topicRaw = prefs.getString("mqtt_topic_raw", "") ?: ""
-                var topicJson = prefs.getString("mqtt_topic_json", "") ?: ""
-                val format = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json"
-                val stationName = prefs.getString("pref_station_name", "") ?: ""
-                // Presence: published by the station itself, so "reachable"
-                // stays distinguishable from "hearing something".
-                val stationId = prefs.getInt("sharing_station_id", 0)
-                val topicStatus = if (stationId > 0) {
-                    "ais/status/SHARE/$stationId"
-                } else {
-                    ""
-                }
-                val antennaUuid = prefs.getString(
-                    PorttrackerAuth.PREF_ANTENNA_UUID, "") ?: ""
-                // String-tolerant: the web config page stores booleans as
-                // strings on save.
-                val gpsEnabled = prefs.all["mqtt_gps_enabled"] == true ||
-                    prefs.all["mqtt_gps_enabled"]?.toString() == "true"
-                val displayName =
-                    prefs.getString("station_display_name", "") ?: ""
-                val stationKind =
-                    (prefs.getString("station_kind", "fixed") ?: "fixed")
-                        .ifBlank { "fixed" }
-                val publicStation = prefs.all["station_public"] == true ||
-                    prefs.all["station_public"]?.toString() == "true"
+    private fun startMqttPublisher() = onMqttExecutor {
+        stopMqttPublisherNow()
+        startMqttPublisherNow()
+    }
 
-                // Auto-construct topics from userId/antennaId if not explicitly set.
-                // This handles devices provisioned before auto-topic construction was added.
-                if (topicRaw.isEmpty() && topicJson.isEmpty()) {
-                    val userId = prefs.getInt("mqtt_user_id", 0)
-                    val antennaId = prefs.getInt("mqtt_antenna_id", 0)
-                    if (userId > 0 && antennaId > 0) {
-                        topicJson = "ais/aisc-json/$userId/$antennaId"
-                        topicRaw = "ais/raw/$userId/$antennaId"
-                        Log.i(TAG, "Auto-constructed MQTT topics from userId=$userId, antennaId=$antennaId")
-                        // Persist so we don't re-derive every time
-                        prefs.edit()
-                            .putString("mqtt_topic_json", topicJson)
-                            .putString("mqtt_topic_raw", topicRaw)
-                            .apply()
-                    }
-                }
-
-                if (brokerUrl.isEmpty() || (topicRaw.isEmpty() && topicJson.isEmpty())) {
-                    Log.e(TAG, "MQTT enabled but broker/topic not configured — skipping")
-                    return@Thread
-                }
-
-                Log.i(TAG, "Starting MQTT publisher: broker=$brokerUrl, topic=${if (format == "raw") topicRaw else topicJson}")
-
-                val publisher = MqttPublisher(this)
-                publisher.start(
-                    MqttPublisher.Config(
-                        brokerUrl = brokerUrl,
-                        username = username,
-                        password = password,
-                        topicRaw = topicRaw,
-                        topicJson = topicJson,
-                        format = format,
-                        qos = 1,
-                        stationName = stationName,
-                        topicStatus = topicStatus,
-                        stationId = stationId,
-                        antennaUuid = antennaUuid,
-                        gpsEnabled = gpsEnabled,
-                        displayName = displayName,
-                        stationKind = stationKind,
-                        publicStation = publicStation
-                    )
-                )
-
-                mqttPublisher = publisher
-
-                // Register NMEA listener to forward messages
-                val listener = object : NMEAListener {
-                    override fun onNMEA(nmea: String) {
-                        publisher.publishNmea(nmea)
-                    }
-                }
-                mqttNmeaListener = listener
-                addNMEAListener(listener)
-
-                Log.i(TAG, "MQTT publisher started and registered as NMEA listener")
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error starting MQTT publisher", e)
+    private fun startMqttPublisherNow() {
+        try {
+            val prefs = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this)
+            val brokerUrl = prefs.getString("mqtt_broker_url", "") ?: ""
+            val username = prefs.getString("mqtt_username", "") ?: ""
+            val password = prefs.getString("mqtt_password", "") ?: ""
+            var topicRaw = prefs.getString("mqtt_topic_raw", "") ?: ""
+            var topicJson = prefs.getString("mqtt_topic_json", "") ?: ""
+            val format = prefs.getString("mqtt_format", "aisc-json") ?: "aisc-json"
+            val stationName = prefs.getString("pref_station_name", "") ?: ""
+            // Presence: published by the station itself, so "reachable"
+            // stays distinguishable from "hearing something".
+            val stationId = prefs.getInt("sharing_station_id", 0)
+            val topicStatus = if (stationId > 0) {
+                "ais/status/SHARE/$stationId"
+            } else {
+                ""
             }
-        }, "MQTT-Setup").start()
+            val antennaUuid = prefs.getString(
+                PorttrackerAuth.PREF_ANTENNA_UUID, "") ?: ""
+            // String-tolerant: the web config page stores booleans as
+            // strings on save.
+            val gpsEnabled = prefs.all["mqtt_gps_enabled"] == true ||
+                prefs.all["mqtt_gps_enabled"]?.toString() == "true"
+            val displayName =
+                prefs.getString("station_display_name", "") ?: ""
+            val stationKind =
+                (prefs.getString("station_kind", "fixed") ?: "fixed")
+                    .ifBlank { "fixed" }
+            val publicStation = prefs.all["station_public"] == true ||
+                prefs.all["station_public"]?.toString() == "true"
+
+            // Auto-construct topics from userId/antennaId if not explicitly set.
+            // This handles devices provisioned before auto-topic construction was added.
+            if (topicRaw.isEmpty() && topicJson.isEmpty()) {
+                val userId = prefs.getInt("mqtt_user_id", 0)
+                val antennaId = prefs.getInt("mqtt_antenna_id", 0)
+                if (userId > 0 && antennaId > 0) {
+                    topicJson = "ais/aisc-json/$userId/$antennaId"
+                    topicRaw = "ais/raw/$userId/$antennaId"
+                    Log.i(TAG, "Auto-constructed MQTT topics from userId=$userId, antennaId=$antennaId")
+                    // Persist so we don't re-derive every time
+                    prefs.edit()
+                        .putString("mqtt_topic_json", topicJson)
+                        .putString("mqtt_topic_raw", topicRaw)
+                        .apply()
+                }
+            }
+
+            if (brokerUrl.isEmpty() || (topicRaw.isEmpty() && topicJson.isEmpty())) {
+                Log.e(TAG, "MQTT enabled but broker/topic not configured — skipping")
+                return
+            }
+
+            Log.i(TAG, "Starting MQTT publisher: broker=$brokerUrl, topic=${if (format == "raw") topicRaw else topicJson}")
+
+            val publisher = MqttPublisher(this)
+            publisher.start(
+                MqttPublisher.Config(
+                    brokerUrl = brokerUrl,
+                    username = username,
+                    password = password,
+                    topicRaw = topicRaw,
+                    topicJson = topicJson,
+                    format = format,
+                    qos = 1,
+                    stationName = stationName,
+                    topicStatus = topicStatus,
+                    stationId = stationId,
+                    antennaUuid = antennaUuid,
+                    gpsEnabled = gpsEnabled,
+                    displayName = displayName,
+                    stationKind = stationKind,
+                    publicStation = publicStation
+                )
+            )
+
+            mqttPublisher = publisher
+
+            // Register NMEA listener to forward messages
+            val listener = object : NMEAListener {
+                override fun onNMEA(nmea: String) {
+                    publisher.publishNmea(nmea)
+                }
+            }
+            mqttNmeaListener = listener
+            addNMEAListener(listener)
+
+            Log.i(TAG, "MQTT publisher started and registered as NMEA listener")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting MQTT publisher", e)
+        }
+    }
+
+    private fun onMqttExecutor(task: () -> Unit) {
+        try {
+            mqttExecutor.execute(task)
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            Log.w(TAG, "MQTT change ignored: service is shutting down")
+        }
     }
 
     /**
@@ -1054,7 +1141,6 @@ class AisReceiverService : Service() {
 
         // Restart MQTT publisher with new settings
         if (config.mqttEnabled && (config.mqttTopicJson.isNotEmpty() || config.mqttTopicRaw.isNotEmpty())) {
-            stopMqttPublisher()
             startMqttPublisher()
         } else {
             // MQTT disabled — stop if running
@@ -1101,13 +1187,19 @@ class AisReceiverService : Service() {
     }
 
     /**
-     * Stop the current MQTT publisher cleanly.
+     * Stop the current MQTT publisher cleanly (queued on mqttExecutor).
      */
-    private fun stopMqttPublisher() {
-        mqttNmeaListener?.let { removeNMEAListener(it) }
-        mqttNmeaListener = null
-        mqttPublisher?.stop()
-        mqttPublisher = null
+    private fun stopMqttPublisher() = onMqttExecutor { stopMqttPublisherNow() }
+
+    private fun stopMqttPublisherNow() {
+        try {
+            mqttNmeaListener?.let { removeNMEAListener(it) }
+            mqttNmeaListener = null
+            mqttPublisher?.stop()
+            mqttPublisher = null
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping MQTT publisher", e)
+        }
     }
 
     /**
@@ -1115,12 +1207,12 @@ class AisReceiverService : Service() {
      */
     fun restartMqttPublisher() {
         Log.i(TAG, "Restarting MQTT publisher via API...")
-        stopMqttPublisher()
         val config = ServiceConfig.fromPreferences(this)
         if (config.mqttEnabled && (config.mqttTopicJson.isNotEmpty() || config.mqttTopicRaw.isNotEmpty())) {
             startMqttPublisher()
         } else {
             Log.i(TAG, "MQTT disabled or not configured — not starting publisher")
+            stopMqttPublisher()
         }
     }
 

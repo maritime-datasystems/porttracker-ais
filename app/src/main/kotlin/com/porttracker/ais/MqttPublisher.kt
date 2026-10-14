@@ -36,10 +36,18 @@ class MqttPublisher(private val context: Context) {
         // Presence refresh. Long enough to be free on a metered connection,
         // short enough that "last seen" means something.
         private const val STATUS_INTERVAL_MS = 60_000L
+        // Retry delay for the FIRST connect. Paho's automatic reconnect only
+        // takes over once a connection has succeeded at least once.
+        private const val CONNECT_RETRY_MIN_MS = 5_000L
+        private const val CONNECT_RETRY_MAX_MS = 300_000L
 
+        // The publisher the service currently runs. Status is read through it
+        // so a publisher being torn down cannot overwrite a newer one's state.
         @Volatile
-        var isConnected = false
-            private set
+        private var active: MqttPublisher? = null
+
+        val isConnected: Boolean
+            get() = active?.connected == true
 
         @Volatile
         var messagesSent = 0L
@@ -87,8 +95,15 @@ class MqttPublisher(private val context: Context) {
             get() = if (format == "raw") topicRaw else topicJson
     }
 
-    private var client: MqttAsyncClient? = null
-    private var config: Config? = null
+    @Volatile private var client: MqttAsyncClient? = null
+    @Volatile private var config: Config? = null
+    @Volatile private var connected = false
+    @Volatile private var stopped = false
+    private var connectAttempts = 0
+    // A sentence taken from the queue whose publish was refused (not
+    // connected / in-flight window full). Sent first on the next flush.
+    // Only touched on the batch timer thread.
+    private var unsent: String? = null
     // Bounded: survives broker reconnects without growing unbounded if the
     // outage lasts. When full, the oldest sentences are dropped first.
     private val pendingMessages = LinkedBlockingQueue<String>(PENDING_QUEUE_CAP)
@@ -97,14 +112,23 @@ class MqttPublisher(private val context: Context) {
     private val lifecycleLock = Object()
 
     /**
-     * Connect to the broker and begin batched publishing.
+     * Begin batched publishing and connect to the broker in the background.
+     *
+     * Never blocks on the network. The flush and presence timers run from the
+     * start, sentences queue up while there is no connection, and a failed
+     * first connect is retried with backoff — before, a station that booted
+     * without internet (or hit a broker hiccup at that moment) never
+     * published anything until someone restarted it by hand.
      */
     fun start(config: Config) {
         synchronized(lifecycleLock) {
             stop() // clean up any previous session
 
             this.config = config
+            stopped = false
+            connectAttempts = 0
             stationInfo = config.stationName
+            active = this
 
             try {
                 val clientId = CLIENT_ID_PREFIX + config.normalizedBrokerUrl.hashCode().toString(16).takeLast(6) +
@@ -114,13 +138,18 @@ class MqttPublisher(private val context: Context) {
 
                 client.setCallback(object : MqttCallbackExtended {
                     override fun connectComplete(reconnect: Boolean, serverURI: String?) {
+                        if (this@MqttPublisher.client !== client) return
                         Log.i(TAG, "MQTT connected (reconnect=$reconnect) to $serverURI")
-                        isConnected = true
+                        connected = true
+                        // After a drop the broker has published our will
+                        // ("offline"); put the retained status right again.
+                        if (reconnect) statusExecutor?.execute { publishStatus(online = true) }
                     }
 
                     override fun connectionLost(cause: Throwable?) {
+                        if (this@MqttPublisher.client !== client) return
                         Log.w(TAG, "MQTT connection lost: ${cause?.message}")
-                        isConnected = false
+                        connected = false
                     }
 
                     override fun messageArrived(topic: String?, message: MqttMessage?) {
@@ -132,33 +161,17 @@ class MqttPublisher(private val context: Context) {
                     }
                 })
 
-                val options = buildConnectOptions(config)
-                // Register the will BEFORE connecting: the broker publishes it
-                // if we vanish without saying goodbye, which is the whole
-                // point - a station that loses power or signal must stop
-                // claiming to be online.
-                if (config.topicStatus.isNotBlank()) {
-                    options.setWill(
-                        config.topicStatus,
-                        statusPayload(config, online = false).toByteArray(),
-                        1, true)
-                }
-                Log.i(TAG, "Connecting to ${config.brokerUrl} as ${config.username}...")
-                client.connect(options).waitForCompletion(CONNECT_TIMEOUT_SEC * 1000L)
-                isConnected = true
-
-                // Start batch flush timer
+                // Timers first: they must run whether or not the first
+                // connect works.
                 batchExecutor = Executors.newSingleThreadScheduledExecutor { r ->
                     Thread(r, "MqttBatchTimer").apply { isDaemon = true }
                 }
-                batchExecutor?.scheduleAtFixedRate(
+                batchExecutor?.scheduleWithFixedDelay(
                     { flushBatch() },
                     BATCH_INTERVAL_MS,
                     BATCH_INTERVAL_MS,
                     TimeUnit.MILLISECONDS
                 )
-
-                publishStatus(online = true)
                 // Refresh presence periodically: it carries live counters
                 // (messages, radio age, SDR state) that the account page and
                 // the station detail page read, and it proves the session is
@@ -166,23 +179,91 @@ class MqttPublisher(private val context: Context) {
                 statusExecutor = Executors.newSingleThreadScheduledExecutor { r ->
                     Thread(r, "MqttStatusTimer").apply { isDaemon = true }
                 }
-                statusExecutor?.scheduleAtFixedRate(
+                statusExecutor?.scheduleWithFixedDelay(
                     { publishStatus(online = true) },
                     STATUS_INTERVAL_MS, STATUS_INTERVAL_MS,
                     TimeUnit.MILLISECONDS)
 
-                Log.i(TAG, "MQTT publisher started — topic: ${config.publishTopic}")
+                connect(client, config)
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start MQTT publisher", e)
-                isConnected = false
+                connected = false
             }
         }
     }
 
     /**
+     * One asynchronous connect attempt; on failure the next one is scheduled
+     * with exponential backoff until it works or the publisher is stopped.
+     */
+    private fun connect(client: MqttAsyncClient, config: Config) {
+        if (stopped || this.client !== client) return
+        val options = buildConnectOptions(config)
+        // Register the will BEFORE connecting: the broker publishes it
+        // if we vanish without saying goodbye, which is the whole
+        // point - a station that loses power or signal must stop
+        // claiming to be online.
+        if (config.topicStatus.isNotBlank()) {
+            options.setWill(
+                config.topicStatus,
+                statusPayload(config, online = false).toByteArray(),
+                1, true)
+        }
+        connectAttempts++
+        Log.i(TAG, "Connecting to ${config.brokerUrl} as ${config.username} (attempt $connectAttempts)...")
+        try {
+            client.connect(options, null, object : IMqttActionListener {
+                override fun onSuccess(asyncActionToken: IMqttToken?) {
+                    if (stopped || this@MqttPublisher.client !== client) {
+                        // Stopped while the connect was in flight: do not
+                        // leave a ghost session behind.
+                        closeQuietly(client)
+                        return
+                    }
+                    connected = true
+                    connectAttempts = 0
+                    Log.i(TAG, "MQTT publisher started — topic: ${config.publishTopic}")
+                    statusExecutor?.execute { publishStatus(online = true) }
+                }
+
+                override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                    Log.w(TAG, "MQTT connect failed: ${exception?.message}")
+                    scheduleReconnect(client, config)
+                }
+            })
+        } catch (e: MqttException) {
+            Log.w(TAG, "MQTT connect could not be started: ${e.message}")
+            scheduleReconnect(client, config)
+        }
+    }
+
+    private fun scheduleReconnect(client: MqttAsyncClient, config: Config) {
+        if (stopped || this.client !== client) return
+        val delay = (CONNECT_RETRY_MIN_MS shl minOf(connectAttempts - 1, 6).coerceAtLeast(0))
+            .coerceAtMost(CONNECT_RETRY_MAX_MS)
+        Log.i(TAG, "Retrying MQTT connect in ${delay / 1000}s")
+        try {
+            batchExecutor?.schedule({ connect(client, config) }, delay, TimeUnit.MILLISECONDS)
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            // Publisher stopped in the meantime.
+        }
+    }
+
+    private fun closeQuietly(client: MqttAsyncClient) {
+        try {
+            if (client.isConnected) client.disconnectForcibly(0, 1000)
+        } catch (_: Exception) {
+        }
+        try {
+            client.close()
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
      * Queue an NMEA sentence for publishing. Thread-safe, never blocks.
-     * Data is queued even while the broker reconnects (Paho auto-reconnect);
+     * Data is queued while the broker is unreachable or reconnecting;
      * when the bounded queue fills, the oldest sentence is dropped.
      */
     fun publishNmea(nmea: String) {
@@ -193,56 +274,72 @@ class MqttPublisher(private val context: Context) {
     }
 
     /**
-     * Drain the pending queue, format, and publish.
+     * Publish queued sentences until the queue is empty or the client stops
+     * accepting them. A sentence the client refuses is kept for the next
+     * flush instead of being thrown away — the old version drained the whole
+     * queue first and lost everything that failed, which is exactly what
+     * happens in a burst (in-flight window full) or when the link drops
+     * mid-flush.
      */
     private fun flushBatch() {
-        if (!isConnected) return  // keep messages queued through a reconnect
-        val batch = mutableListOf<String>()
-        while (pendingMessages.isNotEmpty()) {
-            pendingMessages.poll()?.let { batch.add(it) }
-        }
-        if (batch.isEmpty()) return
-
+        if (!connected) return  // keep messages queued through a reconnect
         val cfg = config ?: return
         val topic = cfg.publishTopic
 
-        try {
-            if (cfg.format == "aisc-json") {
-                for (nmea in batch) {
-                    val trimmed = nmea.trim()
-                    if (trimmed.isEmpty()) continue
-                    val json = JSONObject().apply {
-                        put("nmea", JSONArray().put(trimmed))
-                        put("channel", inferChannel(trimmed))
-                    }
-                    publish(topic, json.toString(), cfg.qos)
-                }
+        while (true) {
+            val nmea = unsent ?: pendingMessages.poll() ?: return
+            unsent = null
+            val trimmed = nmea.trim()
+            if (trimmed.isEmpty()) continue
+            val payload = if (cfg.format == "aisc-json") {
+                JSONObject().apply {
+                    put("nmea", JSONArray().put(trimmed))
+                    put("channel", inferChannel(trimmed))
+                }.toString()
             } else {
-                // Raw format — send each NMEA line as-is
-                for (nmea in batch) {
-                    val trimmed = nmea.trim()
-                    if (trimmed.isEmpty()) continue
-                    publish(topic, trimmed, cfg.qos)
-                }
+                trimmed  // Raw format — send each NMEA line as-is
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error flushing MQTT batch", e)
+            when (publish(topic, payload, cfg.qos)) {
+                PublishResult.SENT -> {}
+                PublishResult.RETRY_LATER -> {
+                    unsent = nmea
+                    return
+                }
+                PublishResult.DROPPED -> {}
+            }
         }
     }
+
+    private enum class PublishResult { SENT, RETRY_LATER, DROPPED }
 
     /**
      * Publish a single message to the broker.
      */
-    private fun publish(topic: String, payload: String, qos: Int) {
-        try {
+    private fun publish(topic: String, payload: String, qos: Int): PublishResult {
+        val c = client ?: return PublishResult.RETRY_LATER
+        return try {
             val mqttMessage = MqttMessage(payload.toByteArray(Charsets.UTF_8)).apply {
                 this.qos = qos
                 isRetained = false
             }
-            client?.publish(topic, mqttMessage)
+            c.publish(topic, mqttMessage)
             messagesSent++
+            PublishResult.SENT
         } catch (e: MqttException) {
+            when (e.reasonCode.toShort()) {
+                MqttException.REASON_CODE_MAX_INFLIGHT,
+                MqttException.REASON_CODE_CLIENT_NOT_CONNECTED,
+                MqttException.REASON_CODE_CLIENT_DISCONNECTING,
+                MqttException.REASON_CODE_CONNECTION_LOST,
+                MqttException.REASON_CODE_WRITE_TIMEOUT -> PublishResult.RETRY_LATER
+                else -> {
+                    Log.e(TAG, "MQTT publish error on topic=$topic: ${e.message}")
+                    PublishResult.DROPPED
+                }
+            }
+        } catch (e: Exception) {
             Log.e(TAG, "MQTT publish error on topic=$topic: ${e.message}")
+            PublishResult.DROPPED
         }
     }
 
@@ -372,6 +469,7 @@ class MqttPublisher(private val context: Context) {
      */
     fun stop() {
         synchronized(lifecycleLock) {
+            stopped = true
             // Say goodbye properly while the connection is still up; the will
             // only covers the case where we cannot.
             publishStatus(online = false)
@@ -395,12 +493,16 @@ class MqttPublisher(private val context: Context) {
             try {
                 client?.close()
             } catch (e: Exception) {
-                Log.w(TAG, "Error closing MQTT client", e)
+                // A connect still in flight refuses close(); its success
+                // callback sees `stopped` and closes the session then.
+                Log.w(TAG, "Error closing MQTT client: ${e.message}")
             }
 
             client = null
-            isConnected = false
+            connected = false
+            if (active === this) active = null
             pendingMessages.clear()
+            unsent = null
             Log.i(TAG, "MQTT publisher stopped")
         }
     }
@@ -426,7 +528,7 @@ class MqttPublisher(private val context: Context) {
             }
 
             // Enable TLS if broker URL starts with ssl://
-            if (config.brokerUrl.startsWith("ssl://")) {
+            if (config.normalizedBrokerUrl.startsWith("ssl://")) {
                 socketFactory = createSslSocketFactory()
             }
         }

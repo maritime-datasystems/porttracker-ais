@@ -74,3 +74,30 @@ Lint and source searches identify the old native preference XML screens (`prefer
 Remaining build warnings include unused resources, old dependencies/target API, localization, and legacy JNI packaging configuration. Move `extractNativeLibs` to Gradle `packaging.jniLibs.useLegacyPackaging = true` as part of the toolchain migration, preserving FRP's need for an extracted executable.
 
 Suggested next implementation order: (1) native/service lifecycle and MQTT recovery, (2) credential provisioning and config validation, (3) separate Play/sideload variants plus signing migration and API 36 changes, (4) hardware/emulator regression matrix and internal Play testing. Hardware reception, live tunnel/broker recovery, navigation-app interoperability and a long-running 16 KB-device test remain necessary; a successful build is not release approval.
+
+## Follow-up: lifecycle and MQTT fixes (14 October 2026, evening)
+
+Addresses the first and fifth P1 rows above and part of the second.
+
+- **Service lifecycle.** `runServiceLoop` is now one loop of engine cycles until stop: every cycle re-reads config, re-scans USB and opens a fresh fd on the receiver thread, which alone owns the USB connection. Restart requests (web UI, dongle attach, permission grant) and stop requests go through `requestEngineRestart` / `requestServiceStop` (flag + native stop + monitor wake-up) instead of `shouldStop` + `interrupt()`. Previously a station that lost its dongle twice, or got two restart requests, stayed web-only for good, and a stale fd from an unplugged dongle could be handed back to the engine. An engine that keeps dying right after start backs off (5 s doubling to 2 min). `onDestroy` waits at most 1.5 s on the main thread; teardown it does not wait for is finished by the receiver thread, and a new service instance waits on the static `serviceLock`.
+- **Lost native stop.** `Run()` reset the native stop flag after starting the device, so a stop requested while the engine was starting up was silently discarded. The flag is now reset in `InitNative`, and Kotlin skips `Run()` if a request arrived before that.
+- **Internal server started once.** `InitNative` started the global `WebViewer` again on every engine cycle, adding duplicate sinks and another listener on the same port. It now starts once per process. The secondary per-receiver `webviewer` on the same port still exists (rest of that P1 row).
+- **MQTT recovery.** `MqttPublisher.start` no longer blocks on the first connect: timers start immediately, sentences queue while offline, and a failed first connect is retried with backoff (5 s doubling to 5 min) until Paho's automatic reconnect takes over. `flushBatch` keeps a refused sentence (not connected, in-flight window full, link dropping) for the next flush instead of discarding the drained batch. Callbacks from a replaced client are ignored, and `isConnected` reads the active publisher only. MQTT start/stop in the service is serialized on one executor, so overlapping config saves and sign-ins can no longer leave an orphaned publisher registered as a listener, and `onDestroy` no longer disconnects on the main thread.
+
+Verified: both flavors build (including native), unit tests and lint pass (0 errors). The MQTT changes were exercised in a temporary JVM test against a real Mosquitto broker in Docker (not committed): broker down at start → backlog of 50 delivered once it came up; burst of 1500 delivered completely; broker restart → 100 sentences queued during the outage delivered after reconnect. The same test against the previous `MqttPublisher` failed at the first step (never connected). - **Receiver stop/start from the web UI.** "Stop" only stops the engine (the service and web UI stay up); with the new loop that would have been treated as an unexpected exit and undone after 5 s. It is now an explicit paused state (`stopReceiver` / `startReceiver`). "Start" previously did nothing while the service was running, so a receiver stopped from the web UI never came back without restarting the app.
+
+**USB phone test** (Samsung SM-S938B, Android 16, sideload debug build, no SDR attached):
+
+| Check | Result |
+|---|---|
+| Install over 3.1.0, cold launch, foreground service | Pass |
+| 5 restarts 0.3 s apart | Coalesced into one new cycle, back to web-only |
+| 4 restarts 2.5 s apart | 4 cycles; `/api/nmea_buffer`, `/admin/api/nmea_buffer`, `status_ui`, `doctor` all 200 afterwards |
+| MQTT with broker down at start (Mosquitto on the dev machine via `adb reverse`) | Retried after 5 s and 10 s, connected by itself once the broker came up |
+| Broker restart | Reconnected within ~1.3 s |
+| 3 config saves 0.2 s apart | Two in-flight connects closed on arrival; exactly one session left at the broker |
+| `kill -9` of the app process | Service restarted by Android (START_STICKY) after ~4 s, MQTT reconnected |
+| Web UI receiver stop → start | Stays stopped while paused; start runs a new engine cycle |
+| Crashes / ANRs | None in the crash buffer or logcat |
+
+The phone's MQTT settings were set back to disabled afterwards. Still untested: anything with an SDR attached (reception, unplug/replug while running, stop/start with a live engine), and a clean `onDestroy` — the service is not exported, so it could not be stopped from adb.

@@ -293,7 +293,22 @@ Java_com_jvdegithub_aiscatcher_AisCatcherJava_InitNative(JNIEnv *env, jclass ins
     server.Set("SHARE_LOC","ON");
     server.Set("REALTIME","ON");
     server.Set("LOG","ON");
-    server.start();
+    // InitNative runs once per engine cycle, but the server outlives the
+    // engine (Close() never stops it). Starting it again subscribes every
+    // sink a second time and opens another listener on the same port.
+    static bool server_started = false;
+    if (!server_started) {
+        try {
+            server.start();
+            server_started = true;
+        } catch (std::exception& e) {
+            callbackError(env, e.what());
+        }
+    }
+
+    // Reset here, not in Run(): a stop requested between InitNative and the
+    // start of Run() must not be wiped out, or the restart is silently lost.
+    stop = false;
 
     return 0;
 }
@@ -391,8 +406,6 @@ Java_com_jvdegithub_aiscatcher_AisCatcherJava_Run(JNIEnv *env, jclass) {
         Info() << "Start Device";
         device->setTag(tag);
         device->Play();
-
-        stop = false;
 
         Info() << "Run Started";
 
